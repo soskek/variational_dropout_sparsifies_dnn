@@ -67,7 +67,6 @@ class VariationalDropoutLinear(chainer.links.Linear):
         reg = (0.5 * F.log1p(F.exp(- log_alpha)) -
                (0.03 + 1.0 / (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
         min_val = self.xp.full(reg.shape, -0.67).astype('f')
-        #min_val = self.xp.full(reg.shape, -3.).astype('f')
         reg = F.where(clip_mask, min_val, reg)
         return F.sum(reg) * normalizer
 
@@ -144,28 +143,6 @@ class MLP(chainer.Chain):
         reporter.report({'rate_p<95': self.r}, self)
 
         return self.loss
-        #0.63576 * sigma(1.8732 + 1.48695 * log(alpha)) - 0.5 * log(1 - alpha^-1) - 0.63576
-
-#0.63576 * sigma(1.8732 + 1.48695 * log(alpha)) - 0.5 * log(1 - alpha^-1) - 0.63576
-
-"""
-def eval_reg(self, **kwargs):
-    alpha = T.nnet.sigmoid(self.logit_alpha)
-    regf = lambda a: 0.5 * T.log(a) + 1.16145124 * a + -1.50204118 * a * a + 0.58629921 * a * a * a
-    reg = T.sum(regf(alpha))*self.num_inputs*self.num_units
-    
-    return -reg
-"""
-"""
-def get_output_for_(self, input, deterministic, **kwargs):
-    alpha = T.nnet.sigmoid(self.logit_alpha)
-    if deterministic:
-        activation = T.dot(input, self.W)
-    else:
-        mu, si = T.dot(input, self.W), T.sqrt(T.dot(input * input, alpha * self.W * self.W) + 1e-8)
-        activation = mu + self._srng.normal(mu.shape, avg=0, std=1) * si
-    return self.nonlinearity(activation + self.b)
-"""
 
 
 def main():
