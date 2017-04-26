@@ -8,6 +8,8 @@ import chainer.links as L
 from chainer import training
 from chainer.training import extensions
 
+import warnings
+
 
 class VariationalDropoutLinear(chainer.links.Linear):
 
@@ -72,3 +74,32 @@ class VariationalDropoutLinear(chainer.links.Linear):
             self._initialize_params(x.size // x.shape[0])
 
         return self.dropout_linear(x)
+
+
+def calculate_stats(chain, threshold=0.95):
+    xp = chain.xp
+    stats = {}
+    all_p = xp.concatenate(
+        [link.calculate_p().data.flatten()
+         for link in chain.links()
+         if getattr(link, 'is_variational_dropout', False)],
+        axis=0)
+    stats['mean_p'] = xp.mean(all_p)
+
+    all_threshold = [link.p_threshold
+                     for link in chain.links()
+                     if getattr(link, 'is_variational_dropout', False)]
+    if any(th != threshold for th in all_threshold):
+        warnings.warn('The threshold for sparsity calculation is different from'
+                      ' thresholds used for prediction with'
+                      ' threshold-based pruning.')
+
+    is_zero = (all_p > threshold)
+    stats['sparsity'] = xp.mean(is_zero)
+
+    n_non_zero = (1 - is_zero).sum()
+    if n_non_zero == 0:
+        stats['W/Wnz'] = float('inf')
+    else:
+        stats['W/Wnz'] = all_p.size * 1. / n_non_zero
+    return stats

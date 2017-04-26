@@ -26,22 +26,24 @@ import variational_dropout
 
 # Network definition
 
-
 class MLP(chainer.Chain):
 
-    def __init__(self, n_units, n_out, n_layers=3):
+    def __init__(self, n_units, n_out, n_layers=1, warm_up=0.001):
         super(MLP, self).__init__(
-            # the size of the inputs to each layer will be inferred
-            l1=L.Linear(None, n_units),  # n_in -> n_units
+            l1=variational_dropout.VariationalDropoutLinear(784, n_units),
             l2=chainer.ChainList(*[
                 variational_dropout.VariationalDropoutLinear(n_units, n_units)
                 for i in range(n_layers)]),
-            l3=L.Linear(None, n_out),  # n_units -> n_out
+            l3=variational_dropout.VariationalDropoutLinear(n_units, n_out),
         )
         self.units = n_units
         self.layers = n_layers
 
-        self.coef = 0.
+        self.warm_up = warm_up
+        if self.warm_up:
+            self.kl_coef = 0.
+        else:
+            self.kl_coef = 1.
 
     def __call__(self, x):
         train = configuration.config.train
@@ -57,12 +59,12 @@ class MLP(chainer.Chain):
             link.calculate_kl()
             for link in self.links()
             if getattr(link, 'is_variational_dropout', False))
-        self.kl_loss = a_regf
-        self.kl_loss *= self.coef
+        self.kl_loss = a_regf * self.kl_coef
 
-        self.coef += 0.001
-        if self.coef >= 1.:
-            self.coef = 1.
+        train = configuration.config.train
+        if train:
+            reporter.report({'kl_coef': self.kl_coef}, self)
+            self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
 
         self.loss = self.class_loss + self.kl_loss
         reporter.report({'loss': self.loss}, self)
@@ -71,14 +73,10 @@ class MLP(chainer.Chain):
         self.accuracy = F.accuracy(self.y, t)
         reporter.report({'accuracy': self.accuracy}, self)
 
-        p = F.stack(
-            [link.calculate_p()
-             for link in self.links()
-             if getattr(link, 'is_variational_dropout', False)]).data
-        self.m = self.xp.mean(p)
-        reporter.report({'mean_p': self.m}, self)
-        self.r = self.xp.mean(p < 0.95)
-        reporter.report({'rate_p<95': self.r}, self)
+        stats = variational_dropout.calculate_stats(self)
+        reporter.report({'mean_p': stats['mean_p']}, self)
+        reporter.report({'sparsity': stats['sparsity']}, self)
+        reporter.report({'W/Wnz': stats['W/Wnz']}, self)
 
         return self.loss
 
@@ -87,7 +85,7 @@ def main():
     parser = argparse.ArgumentParser(description='Chainer example: MNIST')
     parser.add_argument('--batchsize', '-b', type=int, default=100,
                         help='Number of images in each mini-batch')
-    parser.add_argument('--epoch', '-e', type=int, default=20,
+    parser.add_argument('--epoch', '-e', type=int, default=100,
                         help='Number of sweeps over the dataset to train')
     parser.add_argument('--frequency', '-f', type=int, default=-1,
                         help='Frequency of taking a snapshot')
@@ -148,7 +146,7 @@ def main():
 
     # Write a log of evaluation statistics for each epoch
     # trainer.extend(extensions.LogReport())
-    per = min(len(train) // args.batchsize, 1000)
+    per = min(len(train) // args.batchsize // 2, 1000)
     trainer.extend(extensions.LogReport(trigger=(per, 'iteration')))
 
     # Save two plot images to the result dir
@@ -167,9 +165,10 @@ def main():
     # Entries other than 'epoch' are reported by the Classifier link, called by
     # either the updater or the evaluator.
     trainer.extend(extensions.PrintReport(
-        ['epoch', 'main/loss', 'validation/main/loss',
+        ['epoch', 'iteration', 'main/loss', 'validation/main/loss',
          'main/accuracy', 'validation/main/accuracy',
-         'main/class', 'main/kl', 'main/mean_p', 'main/rate_p<95',
+         'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
+         'main/W/Wnz', 'main/kl_coef',
          'elapsed_time']))
 
     # Print a progress bar to stdout
