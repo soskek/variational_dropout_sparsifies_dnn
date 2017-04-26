@@ -1,3 +1,5 @@
+import warnings
+
 import numpy
 
 import chainer
@@ -8,7 +10,7 @@ import chainer.links as L
 from chainer import training
 from chainer.training import extensions
 
-import warnings
+import sparse_chainer
 
 
 def calculate_stats(chain, threshold=0.95):
@@ -55,6 +57,7 @@ class VariationalDropoutLinear(chainer.links.Linear):
         self.p_threshold = p_threshold
         self.loga_threshold = loga_threshold
         self.is_variational_dropout = True
+        self.is_variational_dropout_linear = True
 
     def _initialize_params(self, in_size, log_sigma2=False):
         if not log_sigma2:
@@ -91,6 +94,12 @@ class VariationalDropoutLinear(chainer.links.Linear):
         # def regf(self, a):
         # return F.sum(0.5 * F.log(a) + 1.16145124 * a - 1.50204118 * a * a +
         # 0.58629921 * a * a * a)
+
+    def get_sparse_cpu_model(self):
+        W, b = self.W, self.b
+        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
+        clip_mask = (log_alpha.data > self.loga_threshold)
+        return sparse_chainer.SparseLinearForwardCPU(self, (1. - clip_mask))
 
     def calculate_p(self):
         W = self.W
@@ -224,3 +233,29 @@ class VariationalDropoutChain(chainer.link.Chain):
         reporter.report({'W/Wnz': stats['W/Wnz']}, self)
 
         return self.loss
+
+    def to_cpu_sparse(self):
+        n_old_params = 0
+        n_new_params = 0
+        if self.xp is not numpy:
+            warnings.warn('SparseLinearForwardCPU link is made for'
+                          ' inference usage. Please to_cpu() before inference.')
+        print('Sparsifying fully-connected linear layer in the model...')
+        for name, link in list(self.namedlinks(skipself=True)):
+            for p in link.params():
+                n_old_params += p.size
+
+            if getattr(link, 'is_variational_dropout_linear', False):
+                old = link.copy()
+                raw_name = name.lstrip('/')
+                delattr(self, raw_name)
+                self.add_link(raw_name, old.get_sparse_cpu_model())
+                print(' Sparsified link {}.'.format(raw_name))
+                n_new_params += getattr(self, raw_name).sparse_W.size
+                n_new_params += getattr(self, raw_name).sparse_b.size
+            else:
+                for p in link.params():
+                    n_new_params += p.size
+        print(' # of params: {} -> {} ({:.3f}%)'.format(
+            n_old_params, n_new_params,
+            (n_new_params * 1. / n_old_params * 100)))

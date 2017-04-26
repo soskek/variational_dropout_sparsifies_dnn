@@ -10,6 +10,8 @@ except ImportError:
     pass
 
 import argparse
+import copy
+import time
 
 import numpy
 
@@ -39,6 +41,8 @@ def main():
                         help='Directory to output the result')
     parser.add_argument('--resume', '-r', default='',
                         help='Resume the training from snapshot')
+    parser.add_argument('--model', default='fc',
+                        help='Model type from [fc, conv, lenet300100, lenet5]')
     args = parser.parse_args()
 
     print('GPU: {}'.format(args.gpu))
@@ -46,8 +50,13 @@ def main():
     print('# epoch: {}'.format(args.epoch))
     print('')
 
-    #model = nets.LeNet300100VD()
-    model = nets.LeNet5VD()
+    if args.model in ['fc', 'lenet300100']:
+        model = nets.LeNet300100VD(warm_up=0.001)
+    elif args.model in ['conv', 'lenet5']:
+        model = nets.LeNet5VD(warm_up=0.001)
+    else:
+        exit()
+
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # Make a specified GPU current
         model.to_gpu()  # Copy the model to the GPU
@@ -70,13 +79,14 @@ def main():
                                                  repeat=False, shuffle=False)
 
     # Set up a trainer
-    #updater = training.StandardUpdater(train_iter, optimizer, device=args.gpu)
+    # updater = training.StandardUpdater(train_iter, optimizer,
+    # device=args.gpu)
     updater = training.StandardUpdater(train_iter, optimizer, device=args.gpu,
                                        loss_func=model.calc_loss)
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.out)
 
     # Evaluate the model with the test dataset for each epoch
-    #trainer.extend(extensions.Evaluator(test_iter, model, device=args.gpu))
+    # trainer.extend(extensions.Evaluator(test_iter, model, device=args.gpu))
     trainer.extend(extensions.Evaluator(test_iter, L.Classifier(model),
                                         device=args.gpu))
 
@@ -125,6 +135,31 @@ def main():
     # Run the training
     trainer.run()
 
+    print('Measure inference speeds for 1 sample inference...')
+    test_iter = chainer.iterators.SerialIterator(
+        test, 1, repeat=False, shuffle=False)
+
+    if args.gpu >= 0:
+        classifier = L.Classifier(model.copy())
+        start = time.time()
+        accuracy = extensions.Evaluator(
+            test_iter, classifier, device=args.gpu)()['main/accuracy']
+        print('dense Gpu:', time.time() - start, 's/{} imgs'.format(len(test)))
+
+    model.to_cpu()
+    classifier = L.Classifier(model.copy())
+    start = time.time()
+    accuracy = extensions.Evaluator(
+        test_iter, classifier, device=-1)()['main/accuracy']
+    print('dense Cpu:', time.time() - start, 's/{} imgs'.format(len(test)))
+
+    model.to_cpu_sparse()
+    model.name = None
+    classifier = L.Classifier(copy.deepcopy(model))
+    start = time.time()
+    accuracy = extensions.Evaluator(
+        test_iter, classifier, device=-1)()['main/accuracy']
+    print('sparse Cpu:', time.time() - start, 's/{} imgs'.format(len(test)))
 
 if __name__ == '__main__':
     main()
