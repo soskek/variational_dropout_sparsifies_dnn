@@ -1,4 +1,4 @@
-# (WIP) Variational Dropout Sparsifies Deep Neural Networks
+# Variational Dropout Sparsifies Deep Neural Networks
 The code includes variational dropout linear layer to sparicify deep neural networks.
 It will replicate experiments in the paper below  
 ```
@@ -53,11 +53,13 @@ updater = training.StandardUpdater(
 You can also observe some statistics about variational dropout (e.g., sparsity) in the model
 during training using `chainer.extensions.PrintReport` (see the MNIST example).
 
-In a model by `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
-This repository provides `VariationalDropoutLinear` and `VariationalDropoutConvolution2D`,
-each of which inherits `chainer.links.Linear` and `chainer.links.Convolution2D` respectively.
+A model based on `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
+This repository provides both
+- `VariationalDropoutLinear`, which inherits inherits `chainer.links.Linear`
+- `VariationalDropoutConvolution2D`, which inherits `chainer.links.Convolution2D`
+
 You can use them just by replacing usual `chainer.links.Linear` or `chainer.links.Convolution2D` respectively.
 All of the available arguments of usual variants are supported.
-Additionall arguments for hyperparameters
+And, additional arguments for hyperparameters
 (`p_threshold`, `loga_threshold` and `initial_log_sigma2`) are also available.
 They are already set good parameters shown in the paper by default.
