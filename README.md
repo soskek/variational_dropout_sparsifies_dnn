@@ -32,7 +32,7 @@ This reposity itself does not need any setup.
 
 # Examples
 
-- MNIST: Fully-connected DNN for MNIST. The example is derived from the official MNIST example of Chainer v2.  
+- MNIST: Covolutional DNN (LeNet5) or fully-connected DNN (LeNet-300-100) for MNIST. The example is derived from the official MNIST example of Chainer v2.  
   ```
   python -u train_mnist.py --gpu=0
   ```
