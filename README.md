@@ -36,6 +36,9 @@ This reposity itself does not need any setup.
   ```
   python -u train_mnist.py --gpu=0
   ```
+  Some settings are different from those of experiments in the paper;
+  this learning rate is higher and not decayed and this uses warmup (annealing) training rather than
+  two seperate stages of pretraining (w/o VD) and finetuning (w/ VD).
 
 # How to use variational dropout (VD) in Chainer
 
@@ -47,6 +50,8 @@ updater = training.StandardUpdater(
     train_iter, optimizer, device=args.gpu,
     loss_func=model.calc_loss)
 ```
+You can also observe some statistics about variational dropout (e.g., sparsity) in the model
+during training using `chainer.extensions.PrintReport` (see the MNIST example).
 
 In a model by `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
 This repository provides `VariationalDropoutLinear` and `VariationalDropoutConvolution2D`,
