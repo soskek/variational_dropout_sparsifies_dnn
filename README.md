@@ -1,5 +1,5 @@
 # (WIP) Variational Dropout Sparsifies Deep Neural Networks
-The code includes variational dropout linear layer to sparicy deep neural networks.
+The code includes variational dropout linear layer to sparicify deep neural networks.
 It will replicate experiments in the paper below  
 ```
 Variational Dropout Sparsifies Deep Neural Networks.  
@@ -36,3 +36,23 @@ This reposity itself does not need any setup.
   ```
   python -u train_mnist.py --gpu=0
   ```
+
+# How to use variational dropout (VD) in Chainer
+
+This implements a general model class `VariationalDropoutChain`, which inherits `chainer.Chain`.
+The class has a function to calculate joint objective about loss (sum of cross entroy and KL divergence).
+So, if you use Chainer's official Updater in your code, you can use VD training by writing as follows
+```
+updater = training.StandardUpdater(
+    train_iter, optimizer, device=args.gpu,
+    loss_func=model.calc_loss)
+```
+
+In a model by `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
+This repository provides `VariationalDropoutLinear` and `VariationalDropoutConvolution2D`,
+each of which inherits `chainer.links.Linear` and `chainer.links.Convolution2D` respectively.
+You can use them just by replacing usual `chainer.links.Linear` or `chainer.links.Convolution2D` respectively.
+All of the available arguments of usual variants are supported.
+Additionall arguments for hyperparameters
+(`p_threshold`, `loga_threshold` and `initial_log_sigma2`) are also available.
+They are already set good parameters shown in the paper by default.

@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser(description='Chainer example: MNIST')
     parser.add_argument('--batchsize', '-b', type=int, default=100,
                         help='Number of images in each mini-batch')
-    parser.add_argument('--epoch', '-e', type=int, default=100,
+    parser.add_argument('--epoch', '-e', type=int, default=200,
                         help='Number of sweeps over the dataset to train')
     parser.add_argument('--frequency', '-f', type=int, default=-1,
                         help='Frequency of taking a snapshot')
@@ -46,15 +46,20 @@ def main():
     print('# epoch: {}'.format(args.epoch))
     print('')
 
-    model = nets.LeNet300100()
+    #model = nets.LeNet300100VD()
+    model = nets.LeNet5VD()
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # Make a specified GPU current
         model.to_gpu()  # Copy the model to the GPU
 
     # Setup an optimizer
-    optimizer = chainer.optimizers.Adam(alpha=1e-4)
-    # Note: Original paper linearly decays the learning rate (alpha)
-    #       to zero during 200 epochs
+    optimizer = chainer.optimizers.Adam(alpha=1e-3)
+    # Note:
+    # Original paper sets the learning rate alpha=1e-4,
+    # and linearly decays it to zero during 200 epochs.
+    # And, original paper first trains a model without variational dropout,
+    # and finetunes it for 10-30 epochs
+    # with variational dropout and learning rate=1e-5.
     optimizer.setup(model)
 
     # Load the MNIST dataset
