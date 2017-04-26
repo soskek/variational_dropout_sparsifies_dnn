@@ -1,5 +1,5 @@
 # Variational Dropout Sparsifies Deep Neural Networks
-The code includes variational dropout linear layer to sparsify deep neural networks.
+The code includes variational dropout for linear and convolutional layers to sparsify deep neural networks.
 It will replicate experiments in the paper below  
 ```
 Variational Dropout Sparsifies Deep Neural Networks.  
@@ -16,10 +16,10 @@ This is based on the paper and the authors' [repository](https://github.com/ars-
 
 # Requirements
 
-A few requirements obey those of Chainer v2.
+Requirements of this code obey those of Chainer v2. Additionally, this requires [scipy](https://www.scipy.org/) for sparse matrix computation on CPU.
 
 Note Chainer are planning the v2.0.0 release on May 16.
-Until the day, you can install Chainer v2 by following  
+Until the day, you can install Chainer v2 beta by following  
 ```
 pip install chainer --pre
 ```
@@ -42,6 +42,7 @@ This reposity itself does not need any setup.
 
 # How to use variational dropout (VD) in Chainer
 
+## VariationalDropoutChain
 This implements a general model class `VariationalDropoutChain`, which inherits `chainer.Chain`.
 The class has a function to calculate joint objective about loss (sum of cross entroy and KL divergence).
 So, if you use Chainer's official Updater in your code, you can use VD training by writing as follows
@@ -53,6 +54,7 @@ updater = training.StandardUpdater(
 You can also observe some statistics about VD (e.g., sparsity) in the model
 during training using `chainer.extensions.PrintReport` (see the MNIST example).
 
+## VariationalDropoutLinear, VariationalDropoutConvolution2D
 A model based on `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
 This repository provides both
 - `VariationalDropoutLinear`, which inherits `chainer.links.Linear`
@@ -63,3 +65,11 @@ All available arguments of the old variants are supported.
 And, additional arguments for hyperparameters
 (`p_threshold`, `loga_threshold` and `initial_log_sigma2`) are also available.
 They are already set good parameters shown in the paper by default.
+
+## Forward Propagation using Sparse Computation of scipy.sparse
+A model based on `VariationalDropoutChain` can use the method `model.to_cpu_sparse()`.
+The method transforms all linear layers in the model into new layers with pruned weights
+using sparse matrix on scipy.sparse.
+It accelerates the forward propagation and reduces memory after VD training.
+Please see this usage in MNIST example.
+Note: The transformed model works only on CPUs, for the forward propagation, and in inference.
