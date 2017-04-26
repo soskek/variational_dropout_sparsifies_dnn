@@ -12,7 +12,7 @@ See https://arxiv.org/pdf/1701.05369.pdf.
 This implementation uses new Chainer version 2 (see https://github.com/pfnet/chainer/tree/_v2 or https://github.com/pfnet/chainer/releases/tag/v2.0.0b1).
 This does not work on the old version of Chainer (in its master branch).
 
-This is based on the paper and the authors' [repository](https://github.com/ars-ashuha/variational-dropout-sparsifies-dnn), which uses theano.
+This is based on the paper and the authors' [repository](https://github.com/ars-ashuha/variational-dropout-sparsifies-dnn), which uses theano instead of Chainer.
 
 # Requirements
 
@@ -50,16 +50,16 @@ updater = training.StandardUpdater(
     train_iter, optimizer, device=args.gpu,
     loss_func=model.calc_loss)
 ```
-You can also observe some statistics about variational dropout (e.g., sparsity) in the model
+You can also observe some statistics about VD (e.g., sparsity) in the model
 during training using `chainer.extensions.PrintReport` (see the MNIST example).
 
 A model based on `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
 This repository provides both
-- `VariationalDropoutLinear`, which inherits inherits `chainer.links.Linear`
+- `VariationalDropoutLinear`, which inherits `chainer.links.Linear`
 - `VariationalDropoutConvolution2D`, which inherits `chainer.links.Convolution2D`
 
-You can use them just by replacing usual `chainer.links.Linear` or `chainer.links.Convolution2D` respectively.
-All of the available arguments of usual variants are supported.
+You can use them just by replacing exsisting `chainer.links.Linear` or `chainer.links.Convolution2D` respectively.
+All available arguments of the old variants are supported.
 And, additional arguments for hyperparameters
 (`p_threshold`, `loga_threshold` and `initial_log_sigma2`) are also available.
 They are already set good parameters shown in the paper by default.
