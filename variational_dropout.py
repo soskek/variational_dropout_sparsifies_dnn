@@ -1,14 +1,11 @@
 import warnings
 
-import numpy
-
 import chainer
-from chainer import reporter
 from chainer import configuration
 import chainer.functions as F
-import chainer.links as L
-from chainer import training
-from chainer.training import extensions
+from chainer import reporter
+
+import numpy
 
 import sparse_chainer
 
@@ -27,7 +24,8 @@ def calculate_stats(chain, threshold=0.95):
                      for link in chain.links()
                      if getattr(link, 'is_variational_dropout', False)]
     if any(th != threshold for th in all_threshold):
-        warnings.warn('The threshold for sparsity calculation is different from'
+        warnings.warn('The threshold for sparsity calculation'
+                      ' is different from'
                       ' thresholds used for prediction with'
                       ' threshold-based pruning.')
 
@@ -87,7 +85,8 @@ class VariationalDropoutLinear(chainer.links.Linear):
         clip_mask = (log_alpha.data > self.loga_threshold)
         normalizer = 1. / W.size
         reg = (0.5 * F.log1p(F.exp(- log_alpha)) -
-               (0.03 + 1.0 / (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
+               (0.03 + 1.0 /
+                (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
         min_val = self.xp.full(reg.shape, -0.67).astype('f')
         reg = F.where(clip_mask, min_val, reg)
         return F.sum(reg) * normalizer
@@ -96,7 +95,7 @@ class VariationalDropoutLinear(chainer.links.Linear):
         # 0.58629921 * a * a * a)
 
     def get_sparse_cpu_model(self):
-        W, b = self.W, self.b
+        W = self.W
         log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         return sparse_chainer.SparseLinearForwardCPU(self, (1. - clip_mask))
@@ -175,7 +174,8 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
         clip_mask = (log_alpha.data > self.loga_threshold)
         normalizer = 1. / W.size
         reg = (0.5 * F.log1p(F.exp(- log_alpha)) -
-               (0.03 + 1.0 / (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
+               (0.03 + 1.0 /
+                (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
         min_val = self.xp.full(reg.shape, -0.67).astype('f')
         reg = F.where(clip_mask, min_val, reg)
         return F.sum(reg) * normalizer
@@ -239,7 +239,8 @@ class VariationalDropoutChain(chainer.link.Chain):
         n_new_params = 0
         if self.xp is not numpy:
             warnings.warn('SparseLinearForwardCPU link is made for'
-                          ' inference usage. Please to_cpu() before inference.')
+                          ' inference usage. Please to_cpu()'
+                          ' before inference.')
         print('Sparsifying fully-connected linear layer in the model...')
         for name, link in list(self.namedlinks(skipself=True)):
             for p in link.params():

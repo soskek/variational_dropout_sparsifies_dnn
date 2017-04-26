@@ -1,29 +1,16 @@
-
 #!/usr/bin/env python
 
 from __future__ import print_function
-
-try:
-    import matplotlib
-    matplotlib.use('Agg')
-except ImportError:
-    pass
 
 import argparse
 import copy
 import time
 
-import numpy
-
 import chainer
-from chainer import reporter
-from chainer import configuration
-import chainer.functions as F
 import chainer.links as L
 from chainer import training
 from chainer.training import extensions
 
-import variational_dropout
 import nets
 
 
@@ -79,14 +66,11 @@ def main():
                                                  repeat=False, shuffle=False)
 
     # Set up a trainer
-    # updater = training.StandardUpdater(train_iter, optimizer,
-    # device=args.gpu)
     updater = training.StandardUpdater(train_iter, optimizer, device=args.gpu,
                                        loss_func=model.calc_loss)
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.out)
 
     # Evaluate the model with the test dataset for each epoch
-    # trainer.extend(extensions.Evaluator(test_iter, model, device=args.gpu))
     trainer.extend(extensions.Evaluator(test_iter, L.Classifier(model),
                                         device=args.gpu))
 
@@ -99,7 +83,6 @@ def main():
     trainer.extend(extensions.snapshot(), trigger=(frequency, 'epoch'))
 
     # Write a log of evaluation statistics for each epoch
-    # trainer.extend(extensions.LogReport())
     per = min(len(train) // args.batchsize // 2, 1000)
     trainer.extend(extensions.LogReport(trigger=(per, 'iteration')))
 

@@ -1,8 +1,5 @@
-import chainer
 from chainer import configuration
 from chainer import functions as F
-from chainer import links as L
-from chainer import reporter
 
 import variational_dropout as VD
 

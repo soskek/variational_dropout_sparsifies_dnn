@@ -1,17 +1,12 @@
-import numpy
-import scipy
-from scipy import sparse
-
-import chainer
-from chainer import cuda
-from chainer import reporter
-from chainer import configuration
-import chainer.functions as F
-import chainer.links as L
-from chainer import training
-from chainer.training import extensions
-
 import warnings
+
+from chainer import cuda
+import chainer
+from chainer import configuration
+
+import numpy
+
+from scipy import sparse
 
 
 class SparseLinearForwardCPU(chainer.links.Linear):
