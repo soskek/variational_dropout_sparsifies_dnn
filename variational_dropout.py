@@ -11,6 +11,35 @@ from chainer.training import extensions
 import warnings
 
 
+def calculate_stats(chain, threshold=0.95):
+    xp = chain.xp
+    stats = {}
+    all_p = xp.concatenate(
+        [link.calculate_p().data.flatten()
+         for link in chain.links()
+         if getattr(link, 'is_variational_dropout', False)],
+        axis=0)
+    stats['mean_p'] = xp.mean(all_p)
+
+    all_threshold = [link.p_threshold
+                     for link in chain.links()
+                     if getattr(link, 'is_variational_dropout', False)]
+    if any(th != threshold for th in all_threshold):
+        warnings.warn('The threshold for sparsity calculation is different from'
+                      ' thresholds used for prediction with'
+                      ' threshold-based pruning.')
+
+    is_zero = (all_p > threshold)
+    stats['sparsity'] = xp.mean(is_zero)
+
+    n_non_zero = (1 - is_zero).sum()
+    if n_non_zero == 0:
+        stats['W/Wnz'] = float('inf')
+    else:
+        stats['W/Wnz'] = all_p.size * 1. / n_non_zero
+    return stats
+
+
 class VariationalDropoutLinear(chainer.links.Linear):
 
     def __init__(self, in_size, out_size, nobias=False,
@@ -76,30 +105,44 @@ class VariationalDropoutLinear(chainer.links.Linear):
         return self.dropout_linear(x)
 
 
-def calculate_stats(chain, threshold=0.95):
-    xp = chain.xp
-    stats = {}
-    all_p = xp.concatenate(
-        [link.calculate_p().data.flatten()
-         for link in chain.links()
-         if getattr(link, 'is_variational_dropout', False)],
-        axis=0)
-    stats['mean_p'] = xp.mean(all_p)
+class VariationalDropoutChain(chainer.link.Chain):
 
-    all_threshold = [link.p_threshold
-                     for link in chain.links()
-                     if getattr(link, 'is_variational_dropout', False)]
-    if any(th != threshold for th in all_threshold):
-        warnings.warn('The threshold for sparsity calculation is different from'
-                      ' thresholds used for prediction with'
-                      ' threshold-based pruning.')
+    def __init__(self, warm_up=0.0001):
+        super(VariationalDropoutChain, self).__init__()
+        self.warm_up = warm_up
+        if self.warm_up:
+            self.kl_coef = 0.
+        else:
+            self.kl_coef = 1.
 
-    is_zero = (all_p > threshold)
-    stats['sparsity'] = xp.mean(is_zero)
+    def __call__(self, x):
+        NotImplementedError
 
-    n_non_zero = (1 - is_zero).sum()
-    if n_non_zero == 0:
-        stats['W/Wnz'] = float('inf')
-    else:
-        stats['W/Wnz'] = all_p.size * 1. / n_non_zero
-    return stats
+    def calc_loss(self, x, t):
+        self.y = self(x)
+        self.class_loss = F.softmax_cross_entropy(self.y, t)
+        a_regf = sum(
+            link.calculate_kl()
+            for link in self.links()
+            if getattr(link, 'is_variational_dropout', False))
+        self.kl_loss = a_regf * self.kl_coef
+
+        train = configuration.config.train
+        if train:
+            reporter.report({'kl_coef': self.kl_coef}, self)
+            self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
+
+        self.loss = self.class_loss + self.kl_loss
+        reporter.report({'loss': self.loss}, self)
+        reporter.report({'class': self.class_loss}, self)
+        reporter.report({'kl': self.kl_loss}, self)
+
+        self.accuracy = F.accuracy(self.y, t)
+        reporter.report({'accuracy': self.accuracy}, self)
+
+        stats = calculate_stats(self)
+        reporter.report({'mean_p': stats['mean_p']}, self)
+        reporter.report({'sparsity': stats['sparsity']}, self)
+        reporter.report({'W/Wnz': stats['W/Wnz']}, self)
+
+        return self.loss
