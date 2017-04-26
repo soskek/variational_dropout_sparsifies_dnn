@@ -38,7 +38,7 @@ class SparseLinearForwardCPU(chainer.links.Linear):
             if isinstance(x, chainer.Variable):
                 x = x.data
             if x.ndim > 2:
-                x = x.reshape(x.shape[0], x.size // x.shape[1])
+                x = x.reshape(x.shape[0], x.size // x.shape[0])
             return self.sparse_W.dot(x.T).T + self.sparse_b
         else:
             warnings.warn('SparseLinearForwardCPU link is made for'

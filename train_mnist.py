@@ -86,16 +86,6 @@ def main():
     per = min(len(train) // args.batchsize // 2, 1000)
     trainer.extend(extensions.LogReport(trigger=(per, 'iteration')))
 
-    # Save two plot images to the result dir
-    if extensions.PlotReport.available():
-        trainer.extend(
-            extensions.PlotReport(['main/loss', 'validation/main/loss'],
-                                  'epoch', file_name='loss.png'))
-        trainer.extend(
-            extensions.PlotReport(
-                ['main/accuracy', 'validation/main/accuracy'],
-                'epoch', file_name='accuracy.png'))
-
     # Print selected entries of the log to stdout
     # Here "main" refers to the target link of the "main" optimizer again, and
     # "validation" refers to the default name of the Evaluator extension.
