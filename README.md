@@ -12,7 +12,15 @@ See https://arxiv.org/pdf/1701.05369.pdf.
 This implementation uses new Chainer version 2 (see https://github.com/pfnet/chainer/tree/_v2 or https://github.com/pfnet/chainer/releases/tag/v2.0.0b1).
 This does not work on the old version of Chainer (in its master branch).
 
-This is based on the paper and the authors' [repository](https://github.com/ars-ashuha/variational-dropout-sparsifies-dnn), which uses theano instead of Chainer.
+This repository contains  
+- MNIST example using variational dropout
+    - LeNet-300-100 and LeNet5
+- General Chain for models using variational dropout
+- Linear link using variational dropout
+- Convolution2D link using variational dropout
+- Sparse forward computation of Linear link
+
+The code of variational dropout is partly based on the paper and the authors' [repository](https://github.com/ars-ashuha/variational-dropout-sparsifies-dnn), which uses theano instead of Chainer.
 
 # Requirements
 
@@ -72,4 +80,5 @@ The method transforms all linear layers in the model into new layers with pruned
 using sparse matrix on scipy.sparse.
 It accelerates the forward propagation and reduces memory after VD training.
 Please see this usage in MNIST example.
+
 Note: The transformed model works only on CPUs, for the forward propagation, and in inference.
