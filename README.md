@@ -1,5 +1,5 @@
 # Variational Dropout Sparsifies Deep Neural Networks
-The code includes variational dropout linear layer to sparicify deep neural networks.
+The code includes variational dropout linear layer to sparsify deep neural networks.
 It will replicate experiments in the paper below  
 ```
 Variational Dropout Sparsifies Deep Neural Networks.  
