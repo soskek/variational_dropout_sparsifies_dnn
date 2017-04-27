@@ -15,12 +15,15 @@ This does not work on the old version of Chainer (in its master branch).
 This repository contains  
 - MNIST example using variational dropout
     - LeNet-300-100 and LeNet5
+- CIFAR-10 or -100 example using variational dropout
+    - VGGNet16
 - General Chain for models using variational dropout
 - Linear link using variational dropout
 - Convolution2D link using variational dropout
 - Sparse forward computation of Linear link
 
 The code of variational dropout is partly based on the paper and the authors' [repository](https://github.com/ars-ashuha/variational-dropout-sparsifies-dnn), which uses theano instead of Chainer.
+Example scripts are derived from official examples of Chainer.
 
 # Requirements
 
@@ -47,6 +50,12 @@ This reposity itself does not need any setup.
   Some settings are different from those of experiments in the paper;
   this learning rate is higher and not decayed and this uses warmup (annealing) training rather than
   two seperate stages of pretraining (w/o VD) and finetuning (w/ VD).
+  
+- CIFAR-10 or 100: Convolutional network (VGGNet) for CIFAR. The example is derived from the official CIFAR example of Chainer v2.  
+  ```
+  python -u train_cifar.py --gpu=0
+  ```
+  Some settings also differ from original ones.
 
 # How to use variational dropout (VD) in Chainer
 
@@ -60,7 +69,7 @@ updater = training.StandardUpdater(
     loss_func=model.calc_loss)
 ```
 You can also observe some statistics about VD (e.g., sparsity) in the model
-during training using `chainer.extensions.PrintReport` (see the MNIST example).
+during training using `chainer.extensions.PrintReport` (see the MNIST or CIFAR example).
 
 ## VariationalDropoutLinear, VariationalDropoutConvolution2D
 A model based on `VariationalDropoutChain` can use special layers (Chainer's `link`) in its structure.
@@ -74,11 +83,28 @@ And, additional arguments for hyperparameters
 (`p_threshold`, `loga_threshold` and `initial_log_sigma2`) are also available.
 They are already set good parameters shown in the paper by default.
 
+## Convert common Chain to new Chain using VD
+You can also use variational dropout on an existing `chainer.Chain` model class
+by wrapping the target class with `VariationalDropoutChain` and
+calling `.to_variational_dropout()` as follows
+```
+class VGG16VD(VD.VariationalDropoutChain, VGG16):
+    def __init__(self, class_labels=10, warm_up=0.0001):
+        super(VGG16VD, self).__init__(warm_up=warm_up, class_labels=class_labels)
+
+model = VGG16VD()
+model.to_variational_dropout()
+```
+
+You can see this usage in CIFAR example.
+
 ## Forward Propagation using Sparse Computation of scipy.sparse
-A model based on `VariationalDropoutChain` can use the method `model.to_cpu_sparse()`.
+After training, especially VD training,
+it is desirable to use a model for inference lightly on CPU.
+A model based on `VariationalDropoutChain` can use the method `.to_cpu_sparse()`.
 The method transforms all linear layers in the model into new layers with pruned weights
 using sparse matrix on scipy.sparse.
 It accelerates the forward propagation and reduces memory after VD training.
-Please see this usage in MNIST example.
+Please see this usage in MNIST or CIFAR example.
 
 Note: The transformed model works only on CPUs, for the forward propagation, and in inference.

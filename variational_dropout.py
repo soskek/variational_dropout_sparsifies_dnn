@@ -1,8 +1,10 @@
 import warnings
+from collections import defaultdict
 
 import chainer
 from chainer import configuration
 import chainer.functions as F
+import chainer.links as L
 from chainer import reporter
 
 import numpy
@@ -10,19 +12,28 @@ import numpy
 import sparse_chainer
 
 
+def get_vd_links(link):
+    if isinstance(link, chainer.Chain):
+        for child_link in link.links(skipself=True):
+            for vd_child_link in get_vd_links(child_link):
+                yield vd_child_link
+    else:
+        if getattr(link, 'is_variational_dropout', False):
+            yield link
+
+
 def calculate_stats(chain, threshold=0.95):
     xp = chain.xp
     stats = {}
-    all_p = xp.concatenate(
-        [link.calculate_p().data.flatten()
-         for link in chain.links()
-         if getattr(link, 'is_variational_dropout', False)],
-        axis=0)
+    all_p = [link.calculate_p().data.flatten()
+             for link in get_vd_links(chain)]
+    if not all_p:
+        return defaultdict(float)
+    all_p = xp.concatenate(all_p, axis=0)
     stats['mean_p'] = xp.mean(all_p)
 
     all_threshold = [link.p_threshold
-                     for link in chain.links()
-                     if getattr(link, 'is_variational_dropout', False)]
+                     for link in get_vd_links(chain)]
     if any(th != threshold for th in all_threshold):
         warnings.warn('The threshold for sparsity calculation'
                       ' is different from'
@@ -47,8 +58,8 @@ class VariationalDropoutLinear(chainer.links.Linear):
                  p_threshold=0.95, loga_threshold=3.,
                  initial_log_sigma2=chainer.initializers.Constant(-8.)):
         super(VariationalDropoutLinear, self).__init__(
-            in_size, out_size, nobias,
-            initialW, initial_bias)
+            in_size, out_size, nobias=nobias,
+            initialW=initialW, initial_bias=initial_bias)
         self.add_param('log_sigma2', initializer=initial_log_sigma2)
         if in_size is not None:
             self._initialize_params(in_size, log_sigma2=True)
@@ -65,7 +76,7 @@ class VariationalDropoutLinear(chainer.links.Linear):
 
     def dropout_linear(self, x):
         train = configuration.config.train
-        W, b = self.W, self.b
+        W, b = self.W, getattr(self, 'b', None)
         log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         if train:
@@ -75,7 +86,9 @@ class VariationalDropoutLinear(chainer.links.Linear):
             normal_noise = self.xp.random.normal(
                 0., 1., mu.shape).astype('f')
             activation = mu + si * normal_noise
-            return F.bias(activation, b)
+            if b is not None:
+                activation = F.bias(activation, b)
+            return activation
         else:
             return F.linear(x, (1. - clip_mask) * W, b)
 
@@ -128,7 +141,8 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
                  initial_log_sigma2=chainer.initializers.Constant(-8.)):
         super(VariationalDropoutConvolution2D, self).__init__(
             in_channels, out_channels, ksize, stride, pad,
-            nobias, initialW, initial_bias, deterministic)
+            nobias=nobias, initialW=initialW,
+            initial_bias=initial_bias, deterministic=deterministic)
 
         self.add_param('log_sigma2', initializer=initial_log_sigma2)
         if in_channels is not None:
@@ -192,18 +206,70 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
         return self.dropout_convolution_2d(x)
 
 
+def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
+                initial_log_sigma2=chainer.initializers.Constant(-8.)):
+    if link._cpu:
+        gpu = -1
+    else:
+        gpu = link._device_id
+        link.to_cpu()
+    initialW = link.W.data
+    initial_bias = getattr(link, 'b', None)
+    if initial_bias is not None:
+        initial_bias = initial_bias.data
+    if type(link) == L.Linear:
+        out_size, in_size = link.W.shape
+        new_link = VariationalDropoutLinear(
+            in_size=in_size, out_size=out_size, nobias=False,
+            p_threshold=p_threshold, loga_threshold=loga_threshold,
+            initial_log_sigma2=initial_log_sigma2)
+    elif type(link) == L.Convolution2D:
+        out_channels, in_channels = link.W.shape[:2]
+        ksize = link.ksize
+        stride = link.stride
+        pad = link.pad
+        deterministic = link.deterministic
+        new_link = VariationalDropoutConvolution2D(
+            in_channels=in_channels, out_channels=out_channels,
+            ksize=ksize, stride=stride, pad=pad,
+            nobias=None, initialW=None, initial_bias=None,
+            deterministic=deterministic,
+            p_threshold=p_threshold, loga_threshold=loga_threshold,
+            initial_log_sigma2=initial_log_sigma2)
+    else:
+        NotImplementedError()
+    new_link.W.data[:] = numpy.array(initialW)
+    if initial_bias is not None:
+        new_link.b.data[:] = numpy.array(initial_bias)
+    if gpu >= 0:
+        new_link.to_gpu(gpu)
+    return new_link
+
+
+def to_variational_dropout_link(parent, name, link):
+    if isinstance(link, chainer.Chain):
+        for child_name, child_link in link.namedlinks(skipself=True):
+            to_variational_dropout_link(link, child_name, child_link)
+    if not getattr(link, 'is_variational_dropout', False) and \
+       type(link) in [L.Linear, L.Convolution2D]:
+        old = link.copy()
+        raw_name = name.lstrip('/')
+        delattr(parent, raw_name)
+        new_link = get_vd_link(old)
+        parent.add_link(raw_name, new_link)
+        print(' Replace link {} with a variant using'.format(raw_name) +
+              ' variational dropout.')
+
+
 class VariationalDropoutChain(chainer.link.Chain):
 
-    def __init__(self, warm_up=0.0001):
-        super(VariationalDropoutChain, self).__init__()
+    def __init__(self, warm_up=0.0001, **kwargs):
+        super(VariationalDropoutChain, self).__init__(**kwargs)
         self.warm_up = warm_up
         if self.warm_up:
             self.kl_coef = 0.
         else:
             self.kl_coef = 1.
-
-    def __call__(self, x):
-        NotImplementedError
 
     def calc_loss(self, x, t):
         self.y = self(x)
@@ -260,3 +326,13 @@ class VariationalDropoutChain(chainer.link.Chain):
         print(' # of params: {} -> {} ({:.3f}%)'.format(
             n_old_params, n_new_params,
             (n_new_params * 1. / n_old_params * 100)))
+
+    def to_variational_dropout(self):
+        """Make myself to use variational dropout
+
+        Linear -> VariationalDropoutLinear
+        Convolution2D -> VariationalDropoutConvolution2D
+
+        """
+        for name, link in self.namedlinks(skipself=True):
+            to_variational_dropout_link(self, name, link)
