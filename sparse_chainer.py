@@ -12,13 +12,15 @@ from scipy import sparse
 class SparseLinearForwardCPU(chainer.links.Linear):
 
     def __init__(self, old_linear, W_mask=None, with_dense=False):
-        W, b = old_linear.W.data, old_linear.b.data
+        W = old_linear.W.data
+        b = getattr(old_linear, 'b', None)
         super(SparseLinearForwardCPU, self).__init__(
             W.shape[1], W.shape[0],
             initialW=W, initial_bias=b)
         if not with_dense:
             delattr(self, 'W')
-            delattr(self, 'b')
+            if b is not None:
+                delattr(self, 'b')
 
         xp = cuda.get_array_module(W)
         if W_mask is None:
@@ -26,11 +28,13 @@ class SparseLinearForwardCPU(chainer.links.Linear):
 
         if xp is numpy:
             self.sparse_W = sparse.csc_matrix(W * W_mask)
-            self.sparse_b = b
+            if b is not None:
+                self.sparse_b = b.data
         else:
             self.sparse_W = sparse.csr_matrix(
                 xp.asnumpy(W) * xp.asnumpy(W_mask))
-            self.sparse_b = xp.asnumpy(b)[None, ]
+            if b is not None:
+                self.sparse_b = xp.asnumpy(b.data)[None, ]
 
     def __call__(self, x):
         train = configuration.config.train
@@ -39,7 +43,7 @@ class SparseLinearForwardCPU(chainer.links.Linear):
                 x = x.data
             if x.ndim > 2:
                 x = x.reshape(x.shape[0], x.size // x.shape[0])
-            return self.sparse_W.dot(x.T).T + self.sparse_b
+            return self.sparse_W.dot(x.T).T + getattr(self, 'sparse_b', 0.)
         else:
             warnings.warn('SparseLinearForwardCPU link is made for'
                           ' inference usage. Sparse computation'
