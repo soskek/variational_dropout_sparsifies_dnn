@@ -314,6 +314,7 @@ class VariationalDropoutChain(chainer.link.Chain):
         return self.loss
 
     def to_cpu_sparse(self):
+        self.to_cpu()
         n_total_old_params = 0
         n_total_new_params = 0
         if self.xp is not numpy:
@@ -333,11 +334,11 @@ class VariationalDropoutChain(chainer.link.Chain):
                 if hasattr(getattr(self, raw_name), 'sparse_b'):
                     n_new_params += getattr(self, raw_name).sparse_b.size
                 print(' Sparsified link {}.'.format(raw_name) +
-                      ' # of params: {} -> {} ({:.3f}%)'.format(
+                      '\t# of params: {} -> {} ({:.3f}%)'.format(
                           n_old_params, n_new_params,
                           (n_new_params * 1. / n_old_params * 100)))
             else:
-                print('  Retain link {}. # of params: {}'.format(
+                print('  Retain link {}.\t# of params: {}'.format(
                     raw_name, n_old_params))
                 n_new_params = n_old_params
 
