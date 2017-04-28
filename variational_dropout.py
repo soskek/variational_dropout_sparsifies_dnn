@@ -245,7 +245,8 @@ def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
 def to_variational_dropout_link(parent, name, link, path_name=''):
     raw_name = name.lstrip('/')
     if isinstance(link, chainer.Chain):
-        for child_name, child_link in list(link.namedlinks(skipself=True)):
+        for child_name, child_link in sorted(
+                link.namedlinks(skipself=True), key=lambda x: x[0]):
             to_variational_dropout_link(link, child_name, child_link,
                                         path_name=raw_name + '/')
     elif not '/' in raw_name:
@@ -322,7 +323,8 @@ class VariationalDropoutChain(chainer.link.Chain):
                           ' inference usage. Please to_cpu()'
                           ' before inference.')
         print('Sparsifying fully-connected linear layer in the model...')
-        for name, link in list(self.namedlinks(skipself=True)):
+        for name, link in sorted(
+                self.namedlinks(skipself=True), key=lambda x: x[0]):
             raw_name = name.lstrip('/')
             n_old_params = sum(p.size for p in link.params())
 
@@ -337,13 +339,14 @@ class VariationalDropoutChain(chainer.link.Chain):
                       '\t# of params: {} -> {} ({:.3f}%)'.format(
                           n_old_params, n_new_params,
                           (n_new_params * 1. / n_old_params * 100)))
-            else:
+                n_total_old_params += n_old_params
+                n_total_new_params += n_new_params
+            elif not isinstance(link, chainer.Chain):
                 print('  Retain link {}.\t# of params: {}'.format(
                     raw_name, n_old_params))
                 n_new_params = n_old_params
-
-            n_total_old_params += n_old_params
-            n_total_new_params += n_new_params
+                n_total_old_params += n_old_params
+                n_total_new_params += n_new_params
         print(' total # of params: {} -> {} ({:.3f}%)'.format(
             n_total_old_params, n_total_new_params,
             (n_total_new_params * 1. / n_total_old_params * 100)))
@@ -357,5 +360,6 @@ class VariationalDropoutChain(chainer.link.Chain):
         """
         print('Make {} to use variational dropout.'.format(
             self.__class__.__mro__[2].__name__))
-        for name, link in list(self.namedlinks(skipself=True)):
+        for name, link in sorted(
+                self.namedlinks(skipself=True), key=lambda x: x[0]):
             to_variational_dropout_link(self, name, link)
