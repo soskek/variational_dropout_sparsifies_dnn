@@ -310,31 +310,36 @@ class VariationalDropoutChain(chainer.link.Chain):
         return self.loss
 
     def to_cpu_sparse(self):
-        n_old_params = 0
-        n_new_params = 0
+        n_total_old_params = 0
+        n_total_new_params = 0
         if self.xp is not numpy:
             warnings.warn('SparseLinearForwardCPU link is made for'
                           ' inference usage. Please to_cpu()'
                           ' before inference.')
         print('Sparsifying fully-connected linear layer in the model...')
         for name, link in list(self.namedlinks(skipself=True)):
-            for p in link.params():
-                n_old_params += p.size
+            n_old_params = sum(p.size for p in link.params())
 
             if getattr(link, 'is_variational_dropout_linear', False):
                 old = link.copy()
                 raw_name = name.lstrip('/')
                 delattr(self, raw_name)
                 self.add_link(raw_name, old.get_sparse_cpu_model())
-                print(' Sparsified link {}.'.format(raw_name))
-                n_new_params += getattr(self, raw_name).sparse_W.size
-                n_new_params += getattr(self, raw_name).sparse_b.size
+                n_new_params = getattr(self, raw_name).sparse_W.size
+                if hasattr(getattr(self, raw_name), 'sparse_b'):
+                    n_new_params += getattr(self, raw_name).sparse_b.size
+                print(' Sparsified link {}.'.format(raw_name) +
+                      ' # of params: {} -> {} ({:.3f}%)'.format(
+                          n_old_params, n_new_params,
+                          (n_new_params * 1. / n_old_params * 100)))
             else:
-                for p in link.params():
-                    n_new_params += p.size
-        print(' # of params: {} -> {} ({:.3f}%)'.format(
-            n_old_params, n_new_params,
-            (n_new_params * 1. / n_old_params * 100)))
+                n_new_params = n_old_params
+
+            n_total_old_params += n_old_params
+            n_total_new_params += n_new_params
+        print(' total # of params: {} -> {} ({:.3f}%)'.format(
+            n_total_old_params, n_total_new_params,
+            (n_total_new_params * 1. / n_total_old_params * 100)))
 
     def to_variational_dropout(self):
         """Make myself to use variational dropout
