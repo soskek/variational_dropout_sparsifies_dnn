@@ -242,19 +242,23 @@ def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
     return new_link
 
 
-def to_variational_dropout_link(parent, name, link):
+def to_variational_dropout_link(parent, name, link, path_name=''):
+    raw_name = name.lstrip('/')
     if isinstance(link, chainer.Chain):
-        for child_name, child_link in link.namedlinks(skipself=True):
-            to_variational_dropout_link(link, child_name, child_link)
-    if not getattr(link, 'is_variational_dropout', False) and \
-       type(link) in [L.Linear, L.Convolution2D]:
-        old = link.copy()
-        raw_name = name.lstrip('/')
-        delattr(parent, raw_name)
-        new_link = get_vd_link(old)
-        parent.add_link(raw_name, new_link)
-        print(' Replace link {} with a variant using'.format(raw_name) +
-              ' variational dropout.')
+        for child_name, child_link in list(link.namedlinks(skipself=True)):
+            to_variational_dropout_link(link, child_name, child_link,
+                                        path_name=raw_name + '/')
+    elif not '/' in raw_name:
+        if not getattr(link, 'is_variational_dropout', False) and \
+           type(link) in [L.Linear, L.Convolution2D]:
+            new_link = get_vd_link(link.copy())
+            delattr(parent, raw_name)
+            parent.add_link(raw_name, new_link)
+            print(' Replace link {} with a variant using variational dropout.'
+                  .format(path_name + raw_name))
+
+        else:
+            print('  Retain link {}.'.format(path_name + raw_name))
 
 
 class VariationalDropoutChain(chainer.link.Chain):
@@ -318,11 +322,11 @@ class VariationalDropoutChain(chainer.link.Chain):
                           ' before inference.')
         print('Sparsifying fully-connected linear layer in the model...')
         for name, link in list(self.namedlinks(skipself=True)):
+            raw_name = name.lstrip('/')
             n_old_params = sum(p.size for p in link.params())
 
             if getattr(link, 'is_variational_dropout_linear', False):
                 old = link.copy()
-                raw_name = name.lstrip('/')
                 delattr(self, raw_name)
                 self.add_link(raw_name, old.get_sparse_cpu_model())
                 n_new_params = getattr(self, raw_name).sparse_W.size
@@ -333,6 +337,8 @@ class VariationalDropoutChain(chainer.link.Chain):
                           n_old_params, n_new_params,
                           (n_new_params * 1. / n_old_params * 100)))
             else:
+                print('  Retain link {}. # of params: {}'.format(
+                    raw_name, n_old_params))
                 n_new_params = n_old_params
 
             n_total_old_params += n_old_params
@@ -348,6 +354,7 @@ class VariationalDropoutChain(chainer.link.Chain):
         Convolution2D -> VariationalDropoutConvolution2D
 
         """
-        print('Make Chain to use variational dropout')
-        for name, link in self.namedlinks(skipself=True):
+        print('Make {} to use variational dropout.'.format(
+            self.__class__.__mro__[2].__name__))
+        for name, link in list(self.namedlinks(skipself=True)):
             to_variational_dropout_link(self, name, link)
