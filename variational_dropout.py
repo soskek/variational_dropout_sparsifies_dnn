@@ -11,6 +11,9 @@ import numpy
 
 import sparse_chainer
 
+# Memo: If p=0.95, then alpha=19. ln(19) = 2.94443897917.
+#       Thus, log_alpha_threashold is set 3.0 approximately.
+
 
 def get_vd_links(link):
     if isinstance(link, chainer.Chain):
@@ -77,7 +80,7 @@ class VariationalDropoutLinear(chainer.links.Linear):
     def dropout_linear(self, x):
         train = configuration.config.train
         W, b = self.W, getattr(self, 'b', None)
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
+        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         if train:
             W = (1. - clip_mask) * W
@@ -94,28 +97,23 @@ class VariationalDropoutLinear(chainer.links.Linear):
 
     def calculate_kl(self):
         W = self.W
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
+        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         normalizer = 1. / W.size
-        reg = (0.5 * F.log1p(F.exp(- log_alpha)) -
-               (0.03 + 1.0 /
-                (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
-        min_val = self.xp.full(reg.shape, -0.67).astype('f')
-        reg = F.where(clip_mask, min_val, reg)
-        return F.sum(reg) * normalizer
-        # def regf(self, a):
-        # return F.sum(0.5 * F.log(a) + 1.16145124 * a - 1.50204118 * a * a +
-        # 0.58629921 * a * a * a)
+        reg = (0.63576 * F.sigmoid(1.87320 + 1.48695 * log_alpha)) + \
+            (- 0.5 * F.log1p(F.exp(- log_alpha))) - 0.63576
+        reg = F.where(clip_mask, self.xp.zeros(reg.shape).astype('f'), reg)
+        return - F.sum(reg) * normalizer
 
     def get_sparse_cpu_model(self):
         W = self.W
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
+        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         return sparse_chainer.SparseLinearForwardCPU(self, (1. - clip_mask))
 
     def calculate_p(self):
         W = self.W
-        alpha = F.exp(F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.))
+        alpha = F.exp(F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.))
         p = alpha / (1 + alpha)
         return p
 
@@ -162,7 +160,7 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
     def dropout_convolution_2d(self, x):
         train = configuration.config.train
         W, b = self.W, self.b
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
+        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         if train:
             W = (1. - clip_mask) * W
@@ -184,19 +182,17 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
 
     def calculate_kl(self):
         W = self.W
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.)
+        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
         clip_mask = (log_alpha.data > self.loga_threshold)
         normalizer = 1. / W.size
-        reg = (0.5 * F.log1p(F.exp(- log_alpha)) -
-               (0.03 + 1.0 /
-                (1.0 + F.exp(- (1.5 * (log_alpha + 1.3)))) * 0.64))
-        min_val = self.xp.full(reg.shape, -0.67).astype('f')
-        reg = F.where(clip_mask, min_val, reg)
-        return F.sum(reg) * normalizer
+        reg = (0.63576 * F.sigmoid(1.87320 + 1.48695 * log_alpha)) + \
+            (- 0.5 * F.log1p(F.exp(- log_alpha))) - 0.63576
+        reg = F.where(clip_mask, self.xp.zeros(reg.shape).astype('f'), reg)
+        return - F.sum(reg) * normalizer
 
     def calculate_p(self):
         W = self.W
-        alpha = F.exp(F.clip(self.log_sigma2 - F.log(W ** 2), -8., 8.))
+        alpha = F.exp(F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.))
         p = alpha / (1 + alpha)
         return p
 
@@ -272,6 +268,8 @@ class VariationalDropoutChain(chainer.link.Chain):
             self.kl_coef = 1.
 
     def calc_loss(self, x, t):
+        train = configuration.config.train
+
         self.y = self(x)
         self.class_loss = F.softmax_cross_entropy(self.y, t)
         a_regf = sum(
@@ -280,15 +278,26 @@ class VariationalDropoutChain(chainer.link.Chain):
             if getattr(link, 'is_variational_dropout', False))
         self.kl_loss = a_regf * self.kl_coef
 
-        train = configuration.config.train
-        if train:
-            reporter.report({'kl_coef': self.kl_coef}, self)
-            self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
+        ignore = False
+        if train and self.xp.isnan(self.class_loss.data):
+            self.class_loss = chainer.Variable(
+                self.xp.array(0.).astype('f').sum())
+            ignore = True
+        else:
+            reporter.report({'class': self.class_loss.data}, self)
 
+        if train and self.xp.isnan(self.kl_loss.data):
+            self.kl_loss = chainer.Variable(
+                self.xp.array(0.).astype('f').sum())
+            ignore = True
+        else:
+            reporter.report({'kl': self.kl_loss}, self)
         self.loss = self.class_loss + self.kl_loss
-        reporter.report({'loss': self.loss}, self)
-        reporter.report({'class': self.class_loss}, self)
-        reporter.report({'kl': self.kl_loss}, self)
+        if not ignore:
+            reporter.report({'loss': self.loss}, self)
+
+        self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
+        reporter.report({'kl_coef': self.kl_coef}, self)
 
         self.accuracy = F.accuracy(self.y, t)
         reporter.report({'accuracy': self.accuracy}, self)
@@ -334,5 +343,6 @@ class VariationalDropoutChain(chainer.link.Chain):
         Convolution2D -> VariationalDropoutConvolution2D
 
         """
+        print('Make Chain to use variational dropout')
         for name, link in self.namedlinks(skipself=True):
             to_variational_dropout_link(self, name, link)

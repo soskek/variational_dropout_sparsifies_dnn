@@ -14,6 +14,8 @@ class SparseLinearForwardCPU(chainer.links.Linear):
     def __init__(self, old_linear, W_mask=None, with_dense=False):
         W = old_linear.W.data
         b = getattr(old_linear, 'b', None)
+        if b is not None:
+            b = b.data
         super(SparseLinearForwardCPU, self).__init__(
             W.shape[1], W.shape[0],
             initialW=W, initial_bias=b)
@@ -29,12 +31,12 @@ class SparseLinearForwardCPU(chainer.links.Linear):
         if xp is numpy:
             self.sparse_W = sparse.csc_matrix(W * W_mask)
             if b is not None:
-                self.sparse_b = b.data
+                self.sparse_b = numpy.array(b).astype('f')
         else:
             self.sparse_W = sparse.csr_matrix(
                 xp.asnumpy(W) * xp.asnumpy(W_mask))
             if b is not None:
-                self.sparse_b = xp.asnumpy(b.data)[None, ]
+                self.sparse_b = xp.asnumpy(b)[None, ]
 
     def __call__(self, x):
         train = configuration.config.train

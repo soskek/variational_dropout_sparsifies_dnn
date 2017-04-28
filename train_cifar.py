@@ -62,6 +62,7 @@ def main():
     #optimizer = chainer.optimizers.MomentumSGD(0.1)
     optimizer = chainer.optimizers.Adam(1e-4)
     optimizer.setup(model)
+    optimizer.add_hook(chainer.optimizer.GradientClipping(10.))
     # optimizer.add_hook(chainer.optimizer.WeightDecay(5e-4))
 
     train_iter = chainer.iterators.SerialIterator(train, args.batchsize)
