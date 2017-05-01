@@ -73,10 +73,9 @@ def main():
         model.calc_loss = calc_loss
         model.use_raw_dropout = True
     elif args.resume:
-        # Resume from a snapshot
-        # model = nets.VGG16(class_labels)
-        model = nets.VGG16VD(class_labels, warm_up=0.0001)
+        model = nets.VGG16VD(class_labels, warm_up=1.)
         model(train[0][0][None, ])  # for setting in_channels automatically
+        model.to_variational_dropout()
         chainer.serializers.load_npz(args.resume, model)
     else:
         model = nets.VGG16VD(class_labels, warm_up=0.0001)
@@ -88,31 +87,22 @@ def main():
         model.to_gpu()  # Copy the model to the GPU
 
     if args.pretrain:
-        optimizer = chainer.optimizers.Adam(1e-4)
+        optimizer = chainer.optimizers.MomentumSGD(0.1)
         optimizer.setup(model)
-        # optimizer.add_hook(chainer.optimizer.GradientClipping(10.))
+        optimizer.add_hook(chainer.optimizer.WeightDecay(5e-4))
     elif args.resume:
         optimizer = chainer.optimizers.Adam(1e-5)
         optimizer.setup(model)
-        optimizer.add_hook(chainer.optimizer.GradientClipping(10.))
     else:
         optimizer = chainer.optimizers.Adam(1e-4)
         optimizer.setup(model)
         optimizer.add_hook(chainer.optimizer.GradientClipping(10.))
-
-    if args.resume_opt:
-        chainer.serializers.load_npz(args.resume_opt, optimizer)
 
     train_iter = chainer.iterators.SerialIterator(train, args.batchsize)
     test_iter = chainer.iterators.SerialIterator(test, args.batchsize,
                                                  repeat=False, shuffle=False)
 
     if args.resume:
-        classifier = L.Classifier(model.copy())
-        accuracy = extensions.Evaluator(
-            test_iter, classifier, device=args.gpu)()['main/accuracy']
-        print('test accuracy:', accuracy)
-        model.to_variational_dropout()
         classifier = L.Classifier(model.copy())
         accuracy = extensions.Evaluator(
             test_iter, classifier, device=args.gpu)()['main/accuracy']
@@ -128,22 +118,18 @@ def main():
                                         device=args.gpu))
 
     if args.pretrain:
+        trainer.extend(extensions.ExponentialShift('lr', 0.5),
+                       trigger=(25, 'epoch'))
+    elif not args.resume:
         trainer.extend(extensions.LinearShift(
             'alpha', (1e-4, 0.),
             (0, args.epoch * len(train) // args.batchsize)))
-
-    # Dump a computational graph from 'loss' variable at the first iteration
-    # The "main" refers to the target link of the "main" optimizer.
-    # trainer.extend(extensions.dump_graph('main/loss'))
 
     # Take a snapshot at each epoch
     # trainer.extend(extensions.snapshot(), trigger=(args.epoch, 'epoch'))
     if args.pretrain:
         trainer.extend(extensions.snapshot_object(
             model, 'model_snapshot_{.updater.epoch}'),
-            trigger=(10, 'epoch'))
-        trainer.extend(extensions.snapshot_object(
-            optimizer, 'opt_snapshot_{.updater.epoch}'),
             trigger=(10, 'epoch'))
 
     # Write a log of evaluation statistics for each epoch
