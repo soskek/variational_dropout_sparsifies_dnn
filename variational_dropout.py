@@ -235,8 +235,10 @@ def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
     else:
         NotImplementedError()
     new_link.W.data[:] = numpy.array(initialW).astype('f')
+    assert(numpy.any(link.W.data == new_link.W.data))
     if initial_bias is not None:
         new_link.b.data[:] = numpy.array(initial_bias).astype('f')
+        assert(numpy.any(link.b.data == new_link.b.data))
     if gpu >= 0:
         new_link.to_gpu(gpu)
     return new_link

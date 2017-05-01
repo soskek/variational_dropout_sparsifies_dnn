@@ -1,4 +1,5 @@
 import chainer
+from chainer import configuration
 from chainer import functions as F
 from chainer import links as L
 
@@ -116,6 +117,12 @@ class VGG16(chainer.Chain):
         self.use_raw_dropout = False
 
     def __call__(self, x):
+        train = configuration.config.train
+        if train:
+            # horizontal flips
+            flipped = x[:x.shape[0] // 2, :, :, ::-1]
+            x = self.xp.concatenate([flipped, x[x.shape[0] // 2:]], axis=0)
+
         # 64 channel blocks:
         h = self.block1_1(x)
         if self.use_raw_dropout:
