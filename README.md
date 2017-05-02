@@ -1,5 +1,5 @@
 # Variational Dropout Sparsifies Deep Neural Networks
-The code includes variational dropout for linear and convolutional layers to sparsify deep neural networks.
+The code includes variational dropout for linear and convolutional layers to sparsify deep neural networks by Chainer.
 It will replicate experiments in the paper below  
 ```
 Variational Dropout Sparsifies Deep Neural Networks.  
@@ -55,7 +55,11 @@ This reposity itself does not need any setup.
   ```
   python -u train_cifar.py --gpu=0
   ```
-  Some settings also differ from original ones.
+  This currently fails to completely reproduce results shown in the paper w.r.t both improving sparsity and retaining accuracy.  
+  Additional arguments for running are as follows  
+  - `--resume FILE`: Load a pretrain model (if needed). Default is none, and start training from random initialization.
+  - `--pretrain 1/0`: 1 -> Pretrain w/o VD. 0 -> finetune (from `resume`) or warmup training w/ VD. Default is 0.
+  - `--dataset cifar10/cifar100`: Target dataset. Default is cifar10.
 
 # How to use variational dropout (VD) in Chainer
 
@@ -103,8 +107,11 @@ After training, especially VD training,
 it is desirable to use a model for inference lightly on CPU.
 A model based on `VariationalDropoutChain` can use the method `.to_cpu_sparse()`.
 The method transforms all linear layers in the model into new layers with pruned weights
-using sparse matrix on scipy.sparse.
-It accelerates the forward propagation and reduces memory after VD training.
-Please see this usage in MNIST or CIFAR example.
+using sparse matrix on `scipy.sparse`.
+This accelerates the forward propagation and reduces memory after VD training.
+However, the current implementation does not accelerates convolutional layers
+due to a lack of good methods of convoluions with sparse filters.
+Thus, a model almost consisting of convolutional layers (e.g. VGGNet) can not be accelerated.
+Please see this usage in MNIST example.
 
 Note: The transformed model works only on CPUs, for the forward propagation, and in inference.
