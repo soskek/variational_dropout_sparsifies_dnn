@@ -17,6 +17,9 @@ This repository contains
     - LeNet-300-100 and LeNet5
 - CIFAR-10 or -100 example using variational dropout
     - VGGNet16
+- PennTreeBank RNN language model example using variational dropout
+    - 2-layer vanilla RNN LM
+    - This experiment is original and does not exist in the paper
 - General Chain for models using variational dropout
 - Linear link using variational dropout
 - Convolution2D link using variational dropout
@@ -61,6 +64,11 @@ This reposity itself does not need any setup.
   - `--pretrain 1/0`: 1 -> Pretrain w/o VD. 0 -> finetune (from `resume`) or warmup training w/ VD. Default is 0.
   - `--dataset cifar10/cifar100`: Target dataset. Default is cifar10.
 
+- PTB: RNNLM using recurrent network for language modeling on PennTreeBank. This experiment is original from this repository rather than from the paper. The example is derived from the official PTB example of Chainer v2.  
+  ```
+  python -u train_ptb.py --gpu=0
+  ```
+
 # How to use variational dropout (VD) in Chainer
 
 ## VariationalDropoutChain
@@ -86,6 +94,13 @@ All available arguments of the old variants are supported.
 And, additional arguments for hyperparameters
 (`p_threshold`, `loga_threshold` and `initial_log_sigma2`) are also available.
 They are already set good parameters shown in the paper by default.
+
+These links are used as a primitive part of more complex neural networks.
+For example,
+tanh RNN (i.e., vanilla RNN) can be written with `chainer.links.Linear` layer.
+Thus, the VD variant of tanh RNN `VariationalDropoutTanhRNN` can also be written with `VariationalDropoutLinear`.
+This is used in PTB example, and see `VariationalDropoutTanhRNN` in `net.py` for detailed structure.
+
 
 ## Convert common Chain to new Chain using VD
 You can also use variational dropout on an existing `chainer.Chain` model class
