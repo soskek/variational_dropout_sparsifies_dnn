@@ -168,9 +168,12 @@ def main():
     train_iter = ParallelSequentialIterator(train, args.batchsize)
     val_iter = ParallelSequentialIterator(val, 1, repeat=False)
     test_iter = ParallelSequentialIterator(test, 1, repeat=False)
+    print('# of train:', len(train))
+    print('# of train batch/epoch:',
+          len(train) // args.batchsize // args.bproplen)
 
     # Prepare an RNNLM model
-    model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=5e-6)
+    model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=2e-6)
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # make the GPU current
         model.to_gpu()
@@ -192,6 +195,9 @@ def main():
         val_iter, eval_model, device=args.gpu,
         # Reset the RNN state at the beginning of each evaluation
         eval_hook=lambda _: eval_rnn.reset_state()))
+
+    trainer.extend(extensions.ExponentialShift('lr', 0.6),
+                   trigger=(1, 'epoch'))
 
     interval = 10 if args.test else 100
     trainer.extend(extensions.LogReport(postprocess=compute_perplexity,
