@@ -77,7 +77,7 @@ class VariationalDropoutLinear(chainer.links.Linear):
     def __init__(self, in_size, out_size, nobias=False,
                  initialW=None, initial_bias=None,
                  p_threshold=0.95, loga_threshold=3.,
-                 initial_log_sigma2=chainer.initializers.Constant(-8.)):
+                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
         super(VariationalDropoutLinear, self).__init__(
             in_size, out_size, nobias=nobias,
             initialW=initialW, initial_bias=initial_bias)
@@ -138,7 +138,7 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
                  nobias=False, initialW=None, initial_bias=None,
                  deterministic=False,
                  p_threshold=0.95, loga_threshold=3.,
-                 initial_log_sigma2=chainer.initializers.Constant(-8.)):
+                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
         super(VariationalDropoutConvolution2D, self).__init__(
             in_channels, out_channels, ksize, stride, pad,
             nobias=nobias, initialW=initialW,
@@ -189,7 +189,7 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
 
 
 def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
-                initial_log_sigma2=chainer.initializers.Constant(-8.)):
+                initial_log_sigma2=chainer.initializers.Constant(-10.)):
     if link._cpu:
         gpu = -1
     else:
