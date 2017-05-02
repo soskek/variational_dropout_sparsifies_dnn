@@ -59,9 +59,10 @@ class Block(chainer.Chain):
     """
 
     def __init__(self, out_channels, ksize, pad=1):
+        initializer = chainer.initializers.HeNormal()
         super(Block, self).__init__(
             conv=L.Convolution2D(None, out_channels, ksize, pad=pad,
-                                 nobias=True),
+                                 nobias=True, initialW=initializer),
             bn=L.BatchNormalization(out_channels)
         )
 
@@ -96,6 +97,7 @@ class VGG16(chainer.Chain):
     """
 
     def __init__(self, class_labels=10):
+        initializer = chainer.initializers.HeNormal()
         super(VGG16, self).__init__(
             block1_1=Block(64, 3),
             block1_2=Block(64, 3),
@@ -110,9 +112,10 @@ class VGG16(chainer.Chain):
             block5_1=Block(512, 3),
             block5_2=Block(512, 3),
             block5_3=Block(512, 3),
-            fc1=L.Linear(None, 512, nobias=True),
+            fc1=L.Linear(None, 512, nobias=True, initialW=initializer),
             bn_fc1=L.BatchNormalization(512),
-            fc2=L.Linear(None, class_labels, nobias=True)
+            fc2=L.Linear(None, class_labels, nobias=True,
+                         initialW=initializer),
         )
         self.use_raw_dropout = False
 
