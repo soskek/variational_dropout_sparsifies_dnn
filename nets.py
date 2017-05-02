@@ -1,5 +1,6 @@
 import chainer
 from chainer import configuration
+from chainer import cuda
 from chainer import functions as F
 from chainer import links as L
 
@@ -72,6 +73,23 @@ class Block(chainer.Chain):
         return F.relu(h)
 
 
+def crop(imgs):
+    PIXELS = 32
+    PAD_CROP = 4
+    xp = cuda.get_array_module(imgs)
+    cropped_imgs = xp.zeros(imgs.shape).astype('f')
+    padded_imgs = xp.pad(
+        imgs,
+        pad_width=((0, 0), (0, 0), (PAD_CROP, PAD_CROP), (PAD_CROP, PAD_CROP)),
+        mode='constant').astype('f')
+    for i, (x1, y1) in enumerate(
+            xp.random.randint(0, (PAD_CROP * 2), size=(imgs.shape[0], 2))):
+        x2 = x1 + PIXELS
+        y2 = y1 + PIXELS
+        cropped_imgs[i, :, :, :] = padded_imgs[i, :, x1:x2, y1:y2]
+    return cropped_imgs
+
+
 class VGG16(chainer.Chain):
 
     """A VGG-style network for very small images.
@@ -125,6 +143,7 @@ class VGG16(chainer.Chain):
             # horizontal flips
             flipped = x[:x.shape[0] // 2, :, :, ::-1]
             x = self.xp.concatenate([flipped, x[x.shape[0] // 2:]], axis=0)
+            x = crop(x)
 
         # 64 channel blocks:
         h = self.block1_1(x)
