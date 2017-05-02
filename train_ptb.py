@@ -17,30 +17,7 @@ import chainer.links as L
 from chainer import training
 from chainer.training import extensions
 
-
-# Definition of a recurrent net for language modeling
-class RNNForLM(chainer.Chain):
-
-    def __init__(self, n_vocab, n_units):
-        super(RNNForLM, self).__init__(
-            embed=L.EmbedID(n_vocab, n_units),
-            l1=L.LSTM(n_units, n_units),
-            l2=L.LSTM(n_units, n_units),
-            l3=L.Linear(n_units, n_vocab),
-        )
-        for param in self.params():
-            param.data[...] = np.random.uniform(-0.1, 0.1, param.data.shape)
-
-    def reset_state(self):
-        self.l1.reset_state()
-        self.l2.reset_state()
-
-    def __call__(self, x):
-        h0 = self.embed(x)
-        h1 = self.l1(F.dropout(h0))
-        h2 = self.l2(F.dropout(h1))
-        y = self.l3(F.dropout(h2))
-        return y
+import nets
 
 
 # Dataset iterator to create a batch of sequences at different positions.
@@ -108,9 +85,10 @@ class ParallelSequentialIterator(chainer.dataset.Iterator):
 # Custom updater for truncated BackProp Through Time (BPTT)
 class BPTTUpdater(training.StandardUpdater):
 
-    def __init__(self, train_iter, optimizer, bprop_len, device):
+    def __init__(self, train_iter, optimizer, bprop_len, device,
+                 loss_func=None):
         super(BPTTUpdater, self).__init__(
-            train_iter, optimizer, device=device)
+            train_iter, optimizer, device=device, loss_func=loss_func)
         self.bprop_len = bprop_len
 
     # The core part of the update routine can be customized by overriding.
@@ -132,7 +110,12 @@ class BPTTUpdater(training.StandardUpdater):
             x, t = self.converter(batch, self.device)
 
             # Compute the loss at this time step and accumulate it
-            loss += optimizer.target(chainer.Variable(x), chainer.Variable(t))
+            if self.loss_func is None:
+                loss += optimizer.target(chainer.Variable(x),
+                                         chainer.Variable(t))
+            else:
+                loss += self.loss_func(chainer.Variable(x),
+                                       chainer.Variable(t))
 
         optimizer.target.cleargrads()  # Clear the parameter gradients
         loss.backward()  # Backprop
@@ -187,9 +170,7 @@ def main():
     test_iter = ParallelSequentialIterator(test, 1, repeat=False)
 
     # Prepare an RNNLM model
-    rnn = RNNForLM(n_vocab, args.unit)
-    model = L.Classifier(rnn)
-    model.compute_accuracy = False  # we only want the perplexity
+    model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=5e-6)
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # make the GPU current
         model.to_gpu()
@@ -200,22 +181,31 @@ def main():
     optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
 
     # Set up a trainer
-    updater = BPTTUpdater(train_iter, optimizer, args.bproplen, args.gpu)
+    updater = BPTTUpdater(train_iter, optimizer, args.bproplen, args.gpu,
+                          loss_func=model.calc_loss)
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.out)
 
-    eval_model = model.copy()  # Model with shared params and distinct states
+    # Model with shared params and distinct states
+    eval_model = L.Classifier(model.copy())
     eval_rnn = eval_model.predictor
     trainer.extend(extensions.Evaluator(
         val_iter, eval_model, device=args.gpu,
         # Reset the RNN state at the beginning of each evaluation
         eval_hook=lambda _: eval_rnn.reset_state()))
 
-    interval = 10 if args.test else 500
+    interval = 10 if args.test else 100
     trainer.extend(extensions.LogReport(postprocess=compute_perplexity,
                                         trigger=(interval, 'iteration')))
+
     trainer.extend(extensions.PrintReport(
-        ['epoch', 'iteration', 'perplexity', 'val_perplexity']
-    ), trigger=(interval, 'iteration'))
+        ['epoch', 'iteration',
+         'perplexity', 'val_perplexity',
+         'main/loss', 'validation/main/loss',
+         'main/accuracy', 'validation/main/accuracy',
+         'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
+         'main/W/Wnz', 'main/kl_coef',
+         'elapsed_time']), trigger=(interval, 'iteration'))
+
     trainer.extend(extensions.ProgressBar(
         update_interval=1 if args.test else 10))
     trainer.extend(extensions.snapshot())
@@ -229,7 +219,8 @@ def main():
     # Evaluate the final model
     print('test')
     eval_rnn.reset_state()
-    evaluator = extensions.Evaluator(test_iter, eval_model, device=args.gpu)
+    evaluator = extensions.Evaluator(
+        test_iter, eval_model, device=args.gpu)
     result = evaluator()
     print('test perplexity:', np.exp(float(result['main/loss'])))
 

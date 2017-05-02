@@ -206,3 +206,28 @@ class VGG16VD(VD.VariationalDropoutChain, VGG16):
     def __init__(self, class_labels=10, warm_up=0.0001):
         super(VGG16VD, self).__init__(
             warm_up=warm_up, class_labels=class_labels)
+
+# Definition of a recurrent net for language modeling
+
+
+class RNNForLMVD(VD.VariationalDropoutChain):
+
+    def __init__(self, n_vocab, n_units, warm_up=5e-6):
+        super(RNNForLMVD, self).__init__(warm_up=warm_up)
+        self.add_link('embed', L.EmbedID(n_vocab, n_units))
+        self.add_link('l1', VD.VariationalDropoutTanhRNN(n_units, n_units))
+        self.add_link('l2', VD.VariationalDropoutTanhRNN(n_units, n_units))
+        self.add_link('l3', L.Linear(n_units, n_vocab))
+        # for param in self.params():
+        #    param.data[...] = np.random.uniform(-0.1, 0.1, param.data.shape)
+
+    def reset_state(self):
+        self.l1.reset_state()
+        self.l2.reset_state()
+
+    def __call__(self, x):
+        h0 = self.embed(x)
+        h1 = self.l1(F.dropout(h0))
+        h2 = self.l2(F.dropout(h1))
+        y = self.l3(F.dropout(h2))
+        return y

@@ -188,6 +188,48 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
         return self.dropout_convolution_2d(x)
 
 
+class VariationalDropoutTanhRNN(chainer.Chain):
+
+    def __init__(self, in_size, out_size, nobias=False,
+                 initialW=None, initial_bias=None,
+                 p_threshold=0.95, loga_threshold=3.,
+                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
+        W = VariationalDropoutLinear(
+            in_size + out_size, out_size, nobias=nobias,
+            initialW=initialW, initial_bias=initial_bias,
+            p_threshold=p_threshold, loga_threshold=loga_threshold,
+            initial_log_sigma2=initial_log_sigma2)
+        super(VariationalDropoutTanhRNN, self).__init__(W=W)
+        self.in_size = in_size
+        self.out_size = out_size
+        self.h = None
+
+    def reset_state(self):
+        self.h = None
+
+    def set_state(self, h):
+        self.h = h
+
+    def __call__(self, x, h=None):
+        """RNN call
+        If h is given, this works as stateless rnn.
+        Otherwise, stateful rnn.
+        """
+        stateful = (h is None)
+        if stateful:
+            if self.h is None:
+                self.h = self.xp.zeros((x.shape[0], self.out_size)).astype('f')
+            h = self.h
+        new_h = F.tanh(self.W(F.concat([x, h], axis=1)))
+
+        if stateful:
+            self.h = new_h
+        else:
+            self.h = None
+
+        return new_h
+
+
 def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
     if link._cpu:
