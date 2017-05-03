@@ -21,26 +21,6 @@ from chainer.training import extensions
 import nets
 
 
-class UnShift(extensions.LinearShift):
-    """Trainer extension to retain an optimizer attribute within a range.
-    """
-    invoke_before_training = True
-
-    def __init__(self, attr, value_range, time_range, optimizer=None):
-        super(UnShift, self).__init__(attr, value_range, time_range, optimizer)
-
-    def __call__(self, trainer):
-        optimizer = self._optimizer or trainer.updater.get_optimizer('main')
-        t1, t2 = self._time_range
-        v1, v2 = self._value_range
-        if t1 <= self._t < t2:
-            if self._attr < v1:
-                setattr(optimizer, self._attr, v1)
-            elif v2 < self._attr:
-                setattr(optimizer, self._attr, v2)
-        self._t += 1
-
-
 # Dataset iterator to create a batch of sequences at different positions.
 # This iterator returns a pair of current words and the next words. Each
 # example is a part of sequences starting from the different offsets
@@ -134,9 +114,16 @@ class BPTTUpdater(training.StandardUpdater):
             x, t = self.converter(batch, self.device)
 
             # Compute the loss at this time step and accumulate it
-            if self.loss_func is None:
-                loss += optimizer.target(chainer.Variable(x),
-                                         chainer.Variable(t))
+            if getattr(optimizer.target, 'is_variational_dropout', False):
+                if i == 0:
+                    class_loss, kl_loss = self.loss_func(chainer.Variable(x),
+                                                         chainer.Variable(t),
+                                                         split_loss=True)
+                    loss += class_loss
+                    loss += kl_loss * self.bprop_len
+                else:
+                    loss += self.loss_func(chainer.Variable(x),
+                                           chainer.Variable(t), add_kl=False)
             else:
                 loss += self.loss_func(chainer.Variable(x),
                                        chainer.Variable(t))
@@ -144,9 +131,9 @@ class BPTTUpdater(training.StandardUpdater):
             if self.decay_iter_span != 0 and hasattr(optimizer, 'lr'):
                 if train_iter.iteration >= self.decay_iter_start and \
                    train_iter.iteration % self.decay_iter_span == 0:
-                    setattr(optimizer, 'lr', optimizer.lr / 2.)
+                    setattr(optimizer, 'lr', optimizer.lr / 1.2)
                     print('lr: {} -> {}'.format(
-                        optimizer.lr * 2., optimizer.lr))
+                        optimizer.lr * 1.2, optimizer.lr))
 
         optimizer.target.cleargrads()  # Clear the parameter gradients
         loss.backward()  # Backprop
@@ -162,7 +149,7 @@ class BPTTUpdater(training.StandardUpdater):
 # Routine to rewrite the result dictionary of LogReport to add perplexity
 # values
 def compute_perplexity(result):
-    result['perplexity'] = np.exp(result['main/loss'])
+    result['perplexity'] = np.exp(result['main/class_loss'])
     if 'validation/main/loss' in result:
         result['val_perplexity'] = np.exp(result['validation/main/loss'])
 
@@ -217,6 +204,7 @@ def main():
             model.y = model(x)
             model.loss = F.softmax_cross_entropy(model.y, t)
             reporter.report({'loss': model.loss}, model)
+            reporter.report({'class_loss': model.loss}, model)
             model.accuracy = F.accuracy(model.y, t)
             reporter.report({'accuracy': model.accuracy}, model)
             return model.loss
@@ -267,7 +255,6 @@ def main():
         trainer.extend(extensions.PrintReport(
             ['epoch', 'iteration',
              'perplexity', 'val_perplexity',
-             'main/loss', 'validation/main/loss',
              'main/accuracy', 'validation/main/accuracy',
              'main/lr',
              'elapsed_time']), trigger=(interval, 'iteration'))
@@ -275,7 +262,6 @@ def main():
         trainer.extend(extensions.PrintReport(
             ['epoch', 'iteration',
              'perplexity', 'val_perplexity',
-             'main/loss', 'validation/main/loss',
              'main/accuracy', 'validation/main/accuracy',
              'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
              'main/W/Wnz', 'main/kl_coef', 'main/lr',

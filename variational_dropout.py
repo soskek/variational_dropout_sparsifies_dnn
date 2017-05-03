@@ -348,18 +348,12 @@ class VariationalDropoutChain(chainer.link.Chain):
         else:
             self.kl_coef = 1.
 
-    def calc_loss(self, x, t):
+    def calc_loss(self, x, t, add_kl=True, split_loss=False):
         train = configuration.config.train
 
         self.y = self(x)
         #self.class_loss = F.softmax_cross_entropy(self.y, t)
         self.class_loss = F.forget(F.softmax_cross_entropy, self.y, t)
-        a_regf = sum(
-            calculate_kl(link)
-            for link in self.links()
-            if getattr(link, 'is_variational_dropout', False))
-        self.kl_loss = a_regf * self.kl_coef
-
         ignore = False
         if train and self.xp.isnan(self.class_loss.data):
             self.class_loss = chainer.Variable(
@@ -368,18 +362,28 @@ class VariationalDropoutChain(chainer.link.Chain):
         else:
             reporter.report({'class': self.class_loss.data}, self)
 
-        if train and self.xp.isnan(self.kl_loss.data):
-            self.kl_loss = chainer.Variable(
-                self.xp.array(0.).astype('f').sum())
-            ignore = True
+        if add_kl:
+            a_regf = sum(
+                calculate_kl(link)
+                for link in self.links()
+                if getattr(link, 'is_variational_dropout', False))
+            self.kl_loss = a_regf * self.kl_coef
+
+            if train and self.xp.isnan(self.kl_loss.data):
+                self.kl_loss = chainer.Variable(
+                    self.xp.array(0.).astype('f').sum())
+                ignore = True
+            else:
+                reporter.report({'kl': self.kl_loss}, self)
+            self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
+            reporter.report({'kl_coef': self.kl_coef}, self)
+
+            self.loss = self.class_loss + self.kl_loss
         else:
-            reporter.report({'kl': self.kl_loss}, self)
-        self.loss = self.class_loss + self.kl_loss
+            self.loss = self.class_loss
+
         if not ignore:
             reporter.report({'loss': self.loss}, self)
-
-        self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
-        reporter.report({'kl_coef': self.kl_coef}, self)
 
         self.accuracy = F.accuracy(self.y, t)
         reporter.report({'accuracy': self.accuracy}, self)
@@ -389,7 +393,10 @@ class VariationalDropoutChain(chainer.link.Chain):
         reporter.report({'sparsity': stats['sparsity']}, self)
         reporter.report({'W/Wnz': stats['W/Wnz']}, self)
 
-        return self.loss
+        if split_loss:
+            return self.class_loss, self.kl_loss
+        else:
+            return self.loss
 
     def to_cpu_sparse(self):
         self.to_cpu()
