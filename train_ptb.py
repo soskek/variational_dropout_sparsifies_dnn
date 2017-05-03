@@ -14,10 +14,31 @@ import numpy as np
 import chainer
 import chainer.functions as F
 import chainer.links as L
+from chainer import reporter
 from chainer import training
 from chainer.training import extensions
 
 import nets
+
+
+class UnShift(extensions.LinearShift):
+    """Trainer extension to retain an optimizer attribute within a range.
+    """
+    invoke_before_training = True
+
+    def __init__(self, attr, value_range, time_range, optimizer=None):
+        super(UnShift, self).__init__(attr, value_range, time_range, optimizer)
+
+    def __call__(self, trainer):
+        optimizer = self._optimizer or trainer.updater.get_optimizer('main')
+        t1, t2 = self._time_range
+        v1, v2 = self._value_range
+        if t1 <= self._t < t2:
+            if self._attr < v1:
+                setattr(optimizer, self._attr, v1)
+            elif v2 < self._attr:
+                setattr(optimizer, self._attr, v2)
+        self._t += 1
 
 
 # Dataset iterator to create a batch of sequences at different positions.
@@ -86,10 +107,13 @@ class ParallelSequentialIterator(chainer.dataset.Iterator):
 class BPTTUpdater(training.StandardUpdater):
 
     def __init__(self, train_iter, optimizer, bprop_len, device,
-                 loss_func=None):
+                 loss_func=None, decay_iter=(0, 0)):
         super(BPTTUpdater, self).__init__(
             train_iter, optimizer, device=device, loss_func=loss_func)
         self.bprop_len = bprop_len
+        self.decay_iter_start, self.decay_iter_span = decay_iter
+        self.decay_iter_start *= bprop_len
+        self.decay_iter_span *= bprop_len
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
@@ -117,10 +141,22 @@ class BPTTUpdater(training.StandardUpdater):
                 loss += self.loss_func(chainer.Variable(x),
                                        chainer.Variable(t))
 
+            if self.decay_iter_span != 0 and hasattr(optimizer, 'lr'):
+                if train_iter.iteration >= self.decay_iter_start and \
+                   train_iter.iteration % self.decay_iter_span == 0:
+                    setattr(optimizer, 'lr', optimizer.lr / 2.)
+                    print('lr: {} -> {}'.format(
+                        optimizer.lr * 2., optimizer.lr))
+
         optimizer.target.cleargrads()  # Clear the parameter gradients
         loss.backward()  # Backprop
         loss.unchain_backward()  # Truncate the graph
         optimizer.update()  # Update the parameters
+
+        reporter.report(
+            {'lr': getattr(optimizer, 'lr', getattr(
+                optimizer, 'alpha', None))},
+            optimizer.target)
 
 
 # Routine to rewrite the result dictionary of LogReport to add perplexity
@@ -142,10 +178,11 @@ def main():
                         help='Number of sweeps over the dataset to train')
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
-    parser.add_argument('--gradclip', '-c', type=float, default=5,
-                        help='Gradient norm threshold to clip')
     parser.add_argument('--out', '-o', default='result',
                         help='Directory to output the result')
+    parser.add_argument('--pretrain', default=0,
+                        help='Pretrain (w/o VD) or not (w/ VD).' +
+                        ' default is not (0).')
     parser.add_argument('--resume', '-r', default='',
                         help='Resume the training from snapshot')
     parser.add_argument('--test', action='store_true',
@@ -161,31 +198,56 @@ def main():
     print('#vocab =', n_vocab)
 
     if args.test:
-        train = train[:100]
-        val = val[:100]
-        test = test[:100]
+        train = train[:1000]
+        val = val[:1000]
+        test = test[:1000]
 
     train_iter = ParallelSequentialIterator(train, args.batchsize)
     val_iter = ParallelSequentialIterator(val, 1, repeat=False)
     test_iter = ParallelSequentialIterator(test, 1, repeat=False)
     print('# of train:', len(train))
-    print('# of train batch/epoch:',
-          len(train) // args.batchsize // args.bproplen)
+    n_iters = len(train) // args.batchsize // args.bproplen
+    print('# of train batch/epoch:', n_iters)
 
     # Prepare an RNNLM model
-    model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=2e-6)
+    if args.pretrain:
+        model = nets.RNNForLM(n_vocab, args.unit)
+
+        def calc_loss(x, t):
+            model.y = model(x)
+            model.loss = F.softmax_cross_entropy(model.y, t)
+            reporter.report({'loss': model.loss}, model)
+            model.accuracy = F.accuracy(model.y, t)
+            reporter.report({'accuracy': model.accuracy}, model)
+            return model.loss
+
+        model.calc_loss = calc_loss
+        model.use_raw_dropout = True
+    elif args.resume:
+        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1.)
+        model.to_variational_dropout()
+        chainer.serializers.load_npz(args.resume, model)
+    else:
+        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=2e-6)
+        model.to_variational_dropout()
+
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # make the GPU current
         model.to_gpu()
 
     # Set up an optimizer
-    optimizer = chainer.optimizers.SGD(lr=1.0)
+    if args.pretrain:
+        optimizer = chainer.optimizers.SGD(lr=1.0)
+    else:
+        optimizer = chainer.optimizers.Adam(alpha=1e-4)
     optimizer.setup(model)
-    optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
+    optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
 
     # Set up a trainer
     updater = BPTTUpdater(train_iter, optimizer, args.bproplen, args.gpu,
-                          loss_func=model.calc_loss)
+                          loss_func=model.calc_loss,
+                          decay_iter=((n_iters * 6, n_iters) if args.pretrain
+                                      else (0, 0)))
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.out)
 
     # Model with shared params and distinct states
@@ -196,25 +258,32 @@ def main():
         # Reset the RNN state at the beginning of each evaluation
         eval_hook=lambda _: eval_rnn.reset_state()))
 
-    trainer.extend(extensions.ExponentialShift('lr', 0.6),
-                   trigger=(1, 'epoch'))
-
-    interval = 10 if args.test else 100
+    interval = min(10 if args.test else 100,
+                   max(n_iters, 1))
     trainer.extend(extensions.LogReport(postprocess=compute_perplexity,
                                         trigger=(interval, 'iteration')))
 
-    trainer.extend(extensions.PrintReport(
-        ['epoch', 'iteration',
-         'perplexity', 'val_perplexity',
-         'main/loss', 'validation/main/loss',
-         'main/accuracy', 'validation/main/accuracy',
-         'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
-         'main/W/Wnz', 'main/kl_coef',
-         'elapsed_time']), trigger=(interval, 'iteration'))
+    if args.pretrain:
+        trainer.extend(extensions.PrintReport(
+            ['epoch', 'iteration',
+             'perplexity', 'val_perplexity',
+             'main/loss', 'validation/main/loss',
+             'main/accuracy', 'validation/main/accuracy',
+             'main/lr',
+             'elapsed_time']), trigger=(interval, 'iteration'))
+    else:
+        trainer.extend(extensions.PrintReport(
+            ['epoch', 'iteration',
+             'perplexity', 'val_perplexity',
+             'main/loss', 'validation/main/loss',
+             'main/accuracy', 'validation/main/accuracy',
+             'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
+             'main/W/Wnz', 'main/kl_coef', 'main/lr',
+             'elapsed_time']), trigger=(interval, 'iteration'))
 
     trainer.extend(extensions.ProgressBar(
         update_interval=1 if args.test else 10))
-    trainer.extend(extensions.snapshot())
+    # trainer.extend(extensions.snapshot())
     trainer.extend(extensions.snapshot_object(
         model, 'model_iter_{.updater.iteration}'))
     if args.resume:

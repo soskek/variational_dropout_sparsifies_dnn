@@ -210,16 +210,15 @@ class VGG16VD(VD.VariationalDropoutChain, VGG16):
 # Definition of a recurrent net for language modeling
 
 
-class RNNForLMVD(VD.VariationalDropoutChain):
+class RNNForLM(chainer.Chain):
 
-    def __init__(self, n_vocab, n_units, warm_up=5e-6):
-        super(RNNForLMVD, self).__init__(warm_up=warm_up)
-        self.add_link('embed', L.EmbedID(n_vocab, n_units))
-        self.add_link('l1', VD.VariationalDropoutTanhRNN(n_units, n_units))
-        self.add_link('l2', VD.VariationalDropoutTanhRNN(n_units, n_units))
-        self.add_link('l3', L.Linear(n_units, n_vocab))
-        # for param in self.params():
-        #    param.data[...] = np.random.uniform(-0.1, 0.1, param.data.shape)
+    def __init__(self, n_vocab, n_units):
+        super(RNNForLM, self).__init__(
+            embed=L.EmbedID(n_vocab, n_units),
+            l1=L.LSTM(n_units, n_units),
+            l2=L.LSTM(n_units, n_units),
+            l3=L.Linear(n_units, n_vocab))
+        self.use_raw_dropout = False
 
     def reset_state(self):
         self.l1.reset_state()
@@ -227,7 +226,23 @@ class RNNForLMVD(VD.VariationalDropoutChain):
 
     def __call__(self, x):
         h0 = self.embed(x)
-        h1 = self.l1(F.dropout(h0))
-        h2 = self.l2(F.dropout(h1))
-        y = self.l3(F.dropout(h2))
+        if self.use_raw_dropout:
+            h0 = F.dropout(h0)
+        h1 = self.l1(h0)
+        if self.use_raw_dropout:
+            h1 = F.dropout(h1)
+        h2 = self.l2(h1)
+        if self.use_raw_dropout:
+            h2 = F.dropout(h2)
+        y = self.l3(h2)
         return y
+
+
+class RNNForLMVD(VD.VariationalDropoutChain, RNNForLM):
+
+    def __init__(self, n_vocab, n_units, warm_up=5e-6):
+        super(RNNForLMVD, self).__init__(
+            warm_up=warm_up, n_vocab=n_vocab, n_units=n_units)
+        # Note: calling `.to_variational_dropout()` make this chain
+        # to replace ALL linear links in its structure with VD variants,
+        # which include output word matrix and internal linear layers in LSTM.

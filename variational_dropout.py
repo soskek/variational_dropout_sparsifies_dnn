@@ -230,6 +230,52 @@ class VariationalDropoutTanhRNN(chainer.Chain):
         return new_h
 
 
+class VariationalDropoutLSTM(chainer.Chain):
+
+    def __init__(self, in_size, out_size, nobias=False,
+                 initialW=None, initial_bias=None,
+                 p_threshold=0.95, loga_threshold=3.,
+                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
+        upward = VariationalDropoutLinear(
+            in_size, out_size * 4, nobias=nobias,
+            initialW=initialW, initial_bias=initial_bias,
+            p_threshold=p_threshold, loga_threshold=loga_threshold,
+            initial_log_sigma2=initial_log_sigma2)
+        lateral = VariationalDropoutLinear(
+            in_size, out_size * 4, nobias=True,
+            initialW=initialW,
+            p_threshold=p_threshold, loga_threshold=loga_threshold,
+            initial_log_sigma2=initial_log_sigma2)
+        super(VariationalDropoutLSTM, self).__init__(
+            upward=upward, lateral=lateral)
+        self.in_size = in_size
+        self.out_size = out_size
+        self.h = None
+        self.c = None
+
+    def reset_state(self):
+        self.h = None
+        self.c = None
+
+    def set_state(self, c, h):
+        self.h = h
+        self.c = c
+
+    def __call__(self, x):
+        """Stateful LSTM call
+        """
+        #lstm_in = self.upward(x)
+        lstm_in = F.forget(self.upward, x)
+        if self.h is not None:
+            #lstm_in += self.lateral(self.h)
+            lstm_in += F.forget(self.lateral, x)
+        if self.c is None:
+            self.c = self.xp.zeros((x.shape[0], self.out_size)).astype('f')
+
+        self.c, self.h = F.lstm(self.c, lstm_in)
+        return self.h
+
+
 def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
     if link._cpu:
@@ -306,7 +352,8 @@ class VariationalDropoutChain(chainer.link.Chain):
         train = configuration.config.train
 
         self.y = self(x)
-        self.class_loss = F.softmax_cross_entropy(self.y, t)
+        #self.class_loss = F.softmax_cross_entropy(self.y, t)
+        self.class_loss = F.forget(F.softmax_cross_entropy, self.y, t)
         a_regf = sum(
             calculate_kl(link)
             for link in self.links()
