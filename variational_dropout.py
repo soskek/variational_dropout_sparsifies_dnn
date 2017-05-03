@@ -14,6 +14,12 @@ import sparse_chainer
 # Memo: If p=0.95, then alpha=19. ln(19) = 2.94443897917.
 #       Thus, log_alpha_threashold is set 3.0 approximately.
 
+configuration.config.user_memory_efficiency = 0
+# 1<= : simple calculation like an element-wise one
+# 2<= : little simple calculation like a series of element-wise ones
+# 3<= : complex calculations like matrix ones
+# more memory efficient, it takes much time
+
 
 def get_vd_links(link):
     if isinstance(link, chainer.Chain):
@@ -26,27 +32,42 @@ def get_vd_links(link):
 
 
 def calculate_kl(link):
-    W = link.W
-    log_alpha = F.clip(link.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
-    clip_mask = (log_alpha.data > link.loga_threshold)
-    normalizer = 1. / W.size
-    reg = (0.63576 * F.sigmoid(1.87320 + 1.48695 * log_alpha)) + \
-          (- 0.5 * F.log1p(F.exp(- log_alpha))) - 0.63576
-    reg = F.where(clip_mask, link.xp.zeros(reg.shape).astype('f'), reg)
-    return - F.sum(reg) * normalizer
+    memory_efficiency = configuration.config.user_memory_efficiency
+
+    def _calculate_kl(W, log_sigma2):
+        log_alpha = F.clip(log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
+        clip_mask = (log_alpha.data > link.loga_threshold)
+        normalizer = 1. / W.size
+        reg = (0.63576 * F.sigmoid(1.87320 + 1.48695 * log_alpha)) + \
+              (- 0.5 * F.log1p(F.exp(- log_alpha))) - 0.63576
+        reg = F.where(clip_mask, link.xp.zeros(reg.shape).astype('f'), reg)
+        return - F.sum(reg) * normalizer
+
+    if memory_efficiency > 1:
+        return F.forget(_calculate_kl, link.W, link.log_sigma2)
+    else:
+        return _calculate_kl(link.W, link.log_sigma2)
 
 
 def calculate_p(link):
-    W = link.W
-    alpha = F.exp(F.clip(link.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.))
+    """Calculate (something like) probabilities of variational dropout
+    This method takes high computational cost.
+    """
+    W = link.W.data
+    log_sigma2 = link.log_sigma2.data
+    xp = link.xp
+    alpha = xp.exp(xp.clip(log_sigma2 - xp.log(W ** 2 + 1e-8), -8., 8.))
     p = alpha / (1 + alpha)
     return p
 
 
 def calculate_stats(chain, threshold=0.95):
+    """Calculate stats for parameters of variational dropout
+    This method takes high computational cost.
+    """
     xp = chain.xp
     stats = {}
-    all_p = [calculate_p(link).data.flatten()
+    all_p = [calculate_p(link).flatten()
              for link in get_vd_links(chain)]
     if not all_p:
         return defaultdict(float)
@@ -97,21 +118,30 @@ class VariationalDropoutLinear(chainer.links.Linear):
 
     def dropout_linear(self, x):
         train = configuration.config.train
+        memory_efficiency = configuration.config.user_memory_efficiency
+
         W, b = self.W, getattr(self, 'b', None)
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
-        clip_mask = (log_alpha.data > self.loga_threshold)
-        if train:
-            W = (1. - clip_mask) * W
-            mu = F.linear(x, W)
-            si = F.sqrt(F.linear(x * x, F.exp(log_alpha) * W * W) + 1e-8)
-            normal_noise = self.xp.random.normal(
-                0., 1., mu.shape).astype('f')
-            activation = mu + si * normal_noise
-            if b is not None:
-                activation = F.bias(activation, b)
-            return activation
+
+        def _dropout_linear(x, W, log_sigma2):
+            log_alpha = F.clip(log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
+            clip_mask = (log_alpha.data > self.loga_threshold)
+            if train:
+                W = (1. - clip_mask) * W
+                mu = F.linear(x, W)
+                si = F.sqrt(F.linear(x * x, F.exp(log_alpha) * W * W) + 1e-8)
+                normal_noise = self.xp.random.normal(
+                    0., 1., mu.shape).astype('f')
+                activation = mu + si * normal_noise
+                if b is not None:
+                    activation = F.bias(activation, b)
+                return activation
+            else:
+                return F.linear(x, (1. - clip_mask) * W, b)
+
+        if memory_efficiency > 2:
+            return F.forget(_dropout_linear, x, W, self.log_sigma2)
         else:
-            return F.linear(x, (1. - clip_mask) * W, b)
+            return _dropout_linear(x, W, self.log_sigma2)
 
     def get_sparse_cpu_model(self):
         W = self.W
@@ -264,15 +294,24 @@ class VariationalDropoutLSTM(chainer.Chain):
     def __call__(self, x):
         """Stateful LSTM call
         """
-        #lstm_in = self.upward(x)
-        lstm_in = F.forget(self.upward, x)
+        memory_efficiency = configuration.config.user_memory_efficiency
+
+        if memory_efficiency > 2:
+            lstm_in = F.forget(self.upward, x)
+        else:
+            lstm_in = self.upward(x)
         if self.h is not None:
-            #lstm_in += self.lateral(self.h)
-            lstm_in += F.forget(self.lateral, x)
+            if memory_efficiency > 2:
+                lstm_in += F.forget(self.lateral, x)
+            else:
+                lstm_in += self.lateral(x)
         if self.c is None:
             self.c = self.xp.zeros((x.shape[0], self.out_size)).astype('f')
 
-        self.c, self.h = F.lstm(self.c, lstm_in)
+        if memory_efficiency > 1:
+            self.c, self.h = F.forget(F.lstm, self.c, lstm_in)
+        else:
+            self.c, self.h = F.lstm(self.c, lstm_in)
         return self.h
 
 
@@ -327,7 +366,7 @@ def to_variational_dropout_link(parent, name, link, path_name=''):
                                         path_name=raw_name + '/')
     elif not '/' in raw_name:
         if not getattr(link, 'is_variational_dropout', False) and \
-           type(link) in [L.Linear, L.Convolution2D]:
+                type(link) in [L.Linear, L.Convolution2D]:
             new_link = get_vd_link(link.copy())
             delattr(parent, raw_name)
             parent.add_link(raw_name, new_link)
@@ -348,12 +387,16 @@ class VariationalDropoutChain(chainer.link.Chain):
         else:
             self.kl_coef = 1.
 
-    def calc_loss(self, x, t, add_kl=True, split_loss=False):
+    def calc_loss(self, x, t, add_kl=True, split_loss=False, calc_stats=True):
         train = configuration.config.train
+        memory_efficiency = configuration.config.user_memory_efficiency
 
         self.y = self(x)
-        #self.class_loss = F.softmax_cross_entropy(self.y, t)
-        self.class_loss = F.forget(F.softmax_cross_entropy, self.y, t)
+        if memory_efficiency > 0:
+            self.class_loss = F.forget(F.softmax_cross_entropy, self.y, t)
+        else:
+            self.class_loss = F.softmax_cross_entropy(self.y, t)
+
         ignore = False
         if train and self.xp.isnan(self.class_loss.data):
             self.class_loss = chainer.Variable(
@@ -374,7 +417,7 @@ class VariationalDropoutChain(chainer.link.Chain):
                     self.xp.array(0.).astype('f').sum())
                 ignore = True
             else:
-                reporter.report({'kl': self.kl_loss}, self)
+                reporter.report({'kl': self.kl_loss.data}, self)
             self.kl_coef = min(self.kl_coef + self.warm_up, 1.)
             reporter.report({'kl_coef': self.kl_coef}, self)
 
@@ -383,15 +426,16 @@ class VariationalDropoutChain(chainer.link.Chain):
             self.loss = self.class_loss
 
         if not ignore:
-            reporter.report({'loss': self.loss}, self)
+            reporter.report({'loss': self.loss.data}, self)
 
-        self.accuracy = F.accuracy(self.y, t)
+        self.accuracy = F.accuracy(self.y.data, t).data
         reporter.report({'accuracy': self.accuracy}, self)
 
-        stats = calculate_stats(self)
-        reporter.report({'mean_p': stats['mean_p']}, self)
-        reporter.report({'sparsity': stats['sparsity']}, self)
-        reporter.report({'W/Wnz': stats['W/Wnz']}, self)
+        if calc_stats:
+            stats = calculate_stats(self)
+            reporter.report({'mean_p': stats['mean_p']}, self)
+            reporter.report({'sparsity': stats['sparsity']}, self)
+            reporter.report({'W/Wnz': stats['W/Wnz']}, self)
 
         if split_loss:
             return self.class_loss, self.kl_loss

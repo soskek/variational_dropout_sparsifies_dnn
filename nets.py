@@ -218,7 +218,10 @@ class RNNForLM(chainer.Chain):
             l1=L.LSTM(n_units, n_units),
             l2=L.LSTM(n_units, n_units),
             l3=L.Linear(n_units, n_vocab))
+        self.n_units = n_units
         self.use_raw_dropout = False
+        for p in self.params():
+            p.data[:] = self.xp.random.uniform(-0.1, 0.1, p.shape)
 
     def reset_state(self):
         self.l1.reset_state()
@@ -240,9 +243,18 @@ class RNNForLM(chainer.Chain):
 
 class RNNForLMVD(VD.VariationalDropoutChain, RNNForLM):
 
-    def __init__(self, n_vocab, n_units, warm_up=5e-6):
+    def __init__(self, n_vocab, n_units, warm_up=5e-6,
+                 use_memory_efficient_lstm=True):
         super(RNNForLMVD, self).__init__(
             warm_up=warm_up, n_vocab=n_vocab, n_units=n_units)
         # Note: calling `.to_variational_dropout()` make this chain
         # to replace ALL linear links in its structure with VD variants,
         # which include output word matrix and internal linear layers in LSTM.
+
+        if use_memory_efficient_lstm:
+            delattr(self, 'l1')
+            self.add_link('l1', VD.VariationalDropoutLSTM(
+                self.n_units, self.n_units))
+            delattr(self, 'l2')
+            self.add_link('l2', VD.VariationalDropoutLSTM(
+                self.n_units, self.n_units))

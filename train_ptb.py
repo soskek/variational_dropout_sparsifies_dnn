@@ -8,12 +8,14 @@ https://github.com/tomsercu/lstm
 from __future__ import division
 from __future__ import print_function
 import argparse
+import time
 
 import numpy as np
 
 import chainer
 import chainer.functions as F
 import chainer.links as L
+from chainer import configuration
 from chainer import reporter
 from chainer import training
 from chainer.training import extensions
@@ -104,6 +106,7 @@ class BPTTUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Progress the dataset iterator for bprop_len words at each iteration.
+        start = time.time()
         for i in range(self.bprop_len):
             # Get the next batch (a list of tuples of two word IDs)
             batch = train_iter.__next__()
@@ -118,12 +121,15 @@ class BPTTUpdater(training.StandardUpdater):
                 if i == 0:
                     class_loss, kl_loss = self.loss_func(chainer.Variable(x),
                                                          chainer.Variable(t),
-                                                         split_loss=True)
+                                                         split_loss=True,
+                                                         calc_stats=True)
                     loss += class_loss
                     loss += kl_loss * self.bprop_len
                 else:
                     loss += self.loss_func(chainer.Variable(x),
-                                           chainer.Variable(t), add_kl=False)
+                                           chainer.Variable(t),
+                                           add_kl=False,
+                                           calc_stats=False)
             else:
                 loss += self.loss_func(chainer.Variable(x),
                                        chainer.Variable(t))
@@ -134,10 +140,14 @@ class BPTTUpdater(training.StandardUpdater):
                     setattr(optimizer, 'lr', optimizer.lr / 1.2)
                     print('lr: {} -> {}'.format(
                         optimizer.lr * 1.2, optimizer.lr))
+        loss.data
+        fptime = time.time() - start
 
         optimizer.target.cleargrads()  # Clear the parameter gradients
+        start = time.time()
         loss.backward()  # Backprop
         loss.unchain_backward()  # Truncate the graph
+        bptime = time.time() - start
         optimizer.update()  # Update the parameters
 
         reporter.report(
@@ -145,11 +155,14 @@ class BPTTUpdater(training.StandardUpdater):
                 optimizer, 'alpha', None))},
             optimizer.target)
 
+        reporter.report({'fptime': fptime}, optimizer.target)
+        reporter.report({'bptime': bptime}, optimizer.target)
+
 
 # Routine to rewrite the result dictionary of LogReport to add perplexity
 # values
 def compute_perplexity(result):
-    result['perplexity'] = np.exp(result['main/class_loss'])
+    result['perplexity'] = np.exp(result['main/class'])
     if 'validation/main/loss' in result:
         result['val_perplexity'] = np.exp(result['validation/main/loss'])
 
@@ -204,7 +217,7 @@ def main():
             model.y = model(x)
             model.loss = F.softmax_cross_entropy(model.y, t)
             reporter.report({'loss': model.loss}, model)
-            reporter.report({'class_loss': model.loss}, model)
+            reporter.report({'class': model.loss}, model)
             model.accuracy = F.accuracy(model.y, t)
             reporter.report({'accuracy': model.accuracy}, model)
             return model.loss
@@ -213,11 +226,13 @@ def main():
         model.use_raw_dropout = True
     elif args.resume:
         model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1.)
-        model.to_variational_dropout()
+        # model.to_variational_dropout()
         chainer.serializers.load_npz(args.resume, model)
+        configuration.config.user_memory_efficiency = 3
     else:
-        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=2e-6)
-        model.to_variational_dropout()
+        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-5)
+        # model.to_variational_dropout()
+        configuration.config.user_memory_efficiency = 3
 
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # make the GPU current
@@ -257,6 +272,7 @@ def main():
              'perplexity', 'val_perplexity',
              'main/accuracy', 'validation/main/accuracy',
              'main/lr',
+             #'main/fptime', 'main/bptime',
              'elapsed_time']), trigger=(interval, 'iteration'))
     else:
         trainer.extend(extensions.PrintReport(
@@ -265,6 +281,7 @@ def main():
              'main/accuracy', 'validation/main/accuracy',
              'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
              'main/W/Wnz', 'main/kl_coef', 'main/lr',
+             'main/fptime', 'main/bptime',
              'elapsed_time']), trigger=(interval, 'iteration'))
 
     trainer.extend(extensions.ProgressBar(

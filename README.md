@@ -18,7 +18,7 @@ This repository contains
 - CIFAR-10 or -100 example using variational dropout
     - VGGNet16
 - PennTreeBank RNN language model example using variational dropout
-    - 2-layer vanilla RNN LM
+    - 2-layer LSTM LM
     - This experiment is original and does not exist in the paper
 - General Chain for models using variational dropout
 - Linear link using variational dropout
@@ -68,6 +68,7 @@ This reposity itself does not need any setup.
   ```
   python -u train_ptb.py --gpu=0
   ```
+  VD makes RNN require large memory and much time.
 
 # How to use variational dropout (VD) in Chainer
 
