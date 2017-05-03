@@ -134,9 +134,10 @@ class BPTTUpdater(training.StandardUpdater):
                 loss += self.loss_func(chainer.Variable(x),
                                        chainer.Variable(t))
 
-            if self.decay_iter_span != 0 and hasattr(optimizer, 'lr'):
+            if self.decay_iter_span != 0 and \
+               (hasattr(optimizer, 'lr') and not hasattr(optimizer, 'alpha')):
                 if train_iter.iteration >= self.decay_iter_start and \
-                   train_iter.iteration % self.decay_iter_span == 0:
+                        train_iter.iteration % self.decay_iter_span == 0:
                     setattr(optimizer, 'lr', optimizer.lr / 1.2)
                     print('lr: {} -> {}'.format(
                         optimizer.lr * 1.2, optimizer.lr))
@@ -241,10 +242,14 @@ def main():
     # Set up an optimizer
     if args.pretrain:
         optimizer = chainer.optimizers.SGD(lr=1.0)
+        optimizer.setup(model)
+        optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
     else:
+        # optimizer = chainer.optimizers.Adam(alpha=1e-4)
         optimizer = chainer.optimizers.Adam(alpha=1e-4)
-    optimizer.setup(model)
-    optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
+        #optimizer = chainer.optimizers.Adam(alpha=1e-5)
+        optimizer.setup(model)
+        optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
 
     # Set up a trainer
     updater = BPTTUpdater(train_iter, optimizer, args.bproplen, args.gpu,
@@ -289,8 +294,6 @@ def main():
     # trainer.extend(extensions.snapshot())
     trainer.extend(extensions.snapshot_object(
         model, 'model_iter_{.updater.iteration}'))
-    if args.resume:
-        chainer.serializers.load_npz(args.resume, trainer)
 
     trainer.run()
 
