@@ -20,6 +20,10 @@ configuration.config.user_memory_efficiency = 0
 # 3<= : complex calculations like matrix ones
 # more memory efficient, it takes much time
 
+P_THRESHOLD = 0.95
+LOGA_THRESHOLD = 3.
+INITIAL_LOG_SIGMA2 = chainer.initializers.Constant(-10.)
+
 
 def get_vd_links(link):
     if isinstance(link, chainer.Chain):
@@ -61,7 +65,7 @@ def calculate_p(link):
     return p
 
 
-def calculate_stats(chain, threshold=0.95):
+def calculate_stats(chain, threshold=P_THRESHOLD):
     """Calculate stats for parameters of variational dropout
     This method takes high computational cost.
     """
@@ -81,6 +85,7 @@ def calculate_stats(chain, threshold=0.95):
                       ' is different from'
                       ' thresholds used for prediction with'
                       ' threshold-based pruning.')
+    # TODO: directly use threshold of each link
 
     is_zero = (all_p > threshold)
     stats['sparsity'] = xp.mean(is_zero)
@@ -97,8 +102,8 @@ class VariationalDropoutLinear(chainer.links.Linear):
 
     def __init__(self, in_size, out_size, nobias=False,
                  initialW=None, initial_bias=None,
-                 p_threshold=0.95, loga_threshold=3.,
-                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
+                 p_threshold=P_THRESHOLD, loga_threshold=LOGA_THRESHOLD,
+                 initial_log_sigma2=INITIAL_LOG_SIGMA2):
         super(VariationalDropoutLinear, self).__init__(
             in_size, out_size, nobias=nobias,
             initialW=initialW, initial_bias=initial_bias)
@@ -167,8 +172,8 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
     def __init__(self, in_channels, out_channels, ksize, stride=1, pad=0,
                  nobias=False, initialW=None, initial_bias=None,
                  deterministic=False,
-                 p_threshold=0.95, loga_threshold=3.,
-                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
+                 p_threshold=P_THRESHOLD, loga_threshold=LOGA_THRESHOLD,
+                 initial_log_sigma2=INITIAL_LOG_SIGMA2):
         super(VariationalDropoutConvolution2D, self).__init__(
             in_channels, out_channels, ksize, stride, pad,
             nobias=nobias, initialW=initialW,
@@ -222,8 +227,8 @@ class VariationalDropoutTanhRNN(chainer.Chain):
 
     def __init__(self, in_size, out_size, nobias=False,
                  initialW=None, initial_bias=None,
-                 p_threshold=0.95, loga_threshold=3.,
-                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
+                 p_threshold=P_THRESHOLD, loga_threshold=LOGA_THRESHOLD,
+                 initial_log_sigma2=INITIAL_LOG_SIGMA2):
         W = VariationalDropoutLinear(
             in_size + out_size, out_size, nobias=nobias,
             initialW=initialW, initial_bias=initial_bias,
@@ -264,8 +269,8 @@ class VariationalDropoutLSTM(chainer.Chain):
 
     def __init__(self, in_size, out_size, nobias=False,
                  initialW=None, initial_bias=None,
-                 p_threshold=0.95, loga_threshold=3.,
-                 initial_log_sigma2=chainer.initializers.Constant(-10.)):
+                 p_threshold=P_THRESHOLD, loga_threshold=LOGA_THRESHOLD,
+                 initial_log_sigma2=INITIAL_LOG_SIGMA2):
         upward = VariationalDropoutLinear(
             in_size, out_size * 4, nobias=nobias,
             initialW=initialW, initial_bias=initial_bias,
@@ -315,8 +320,9 @@ class VariationalDropoutLSTM(chainer.Chain):
         return self.h
 
 
-def get_vd_link(link, p_threshold=0.95, loga_threshold=3.,
-                initial_log_sigma2=chainer.initializers.Constant(-10.)):
+def get_vd_link(link,
+                p_threshold=P_THRESHOLD, loga_threshold=LOGA_THRESHOLD,
+                initial_log_sigma2=INITIAL_LOG_SIGMA2):
     if link._cpu:
         gpu = -1
     else:
