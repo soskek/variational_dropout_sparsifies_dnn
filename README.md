@@ -68,7 +68,7 @@ This reposity itself does not need any setup.
   ```
   python -u train_ptb.py --gpu=0
   ```
-  VD makes RNN require large memory and much time.
+  VD-RNN require large memory and much time. In our experiment, introducing VD into LSTM damages performance even after pretraining.
 
 # How to use variational dropout (VD) in Chainer
 
