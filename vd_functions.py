@@ -219,17 +219,15 @@ class VDLinear(function.Function):
     def check_type_forward(self, in_types):
         pass
 
-    def forward(self, inputs):
-        # TODO: cuda kernel
+    def forward_cpu(self, inputs):
         # TODO: merge calculate_log_alpha and reuse W ** 2
         x, W, log_alpha = inputs[:3]
         x = _as_mat(x)
-        xp = cuda.get_array_module(x)
         W = ((1. - self.clip_mask) * W).astype(W.dtype, copy=False)
         mu = x.dot(W.T)
-        si = xp.sqrt(
-            (x * x).dot((xp.exp(log_alpha) * W * W).T) + self.eps)
-        self.normal_noise = xp.random.standard_normal(mu.shape).astype(
+        si = numpy.sqrt(
+            (x * x).dot((numpy.exp(log_alpha) * W * W).T) + self.eps)
+        self.normal_noise = numpy.random.standard_normal(mu.shape).astype(
             x.dtype, copy=False)
         y = mu + si * self.normal_noise
         if len(inputs) == 4:
@@ -237,19 +235,49 @@ class VDLinear(function.Function):
             y += b
         return y,
 
-    def backward(self, inputs, gy):
+    def forward_gpu(self, inputs):
         # TODO: cuda kernel
         # TODO: merge calculate_log_alpha and reuse W ** 2
         x, W, log_alpha = inputs[:3]
         x = _as_mat(x)
-        xp = cuda.get_array_module(x)
+        W, alpha_W2 = cuda.elementwise(
+            'T W, T clip_mask, T la',
+            'T clip_W, T alpha_W2',
+            '''
+            clip_W = ((T)1.0 - clip_mask) * W;
+            alpha_W2 = exp(la) * clip_W * clip_W;
+            ''',
+            'vdl1_fwd')(
+                W, self.clip_mask, log_alpha)
+        x2 = x * x
+        mu = x.dot(W.T)
+        si2 = x2.dot(alpha_W2.T)
+        self.normal_noise = xp.random.standard_normal(mu.shape).astype(
+            x.dtype, copy=False)
+        y = cuda.elementwise(
+            'T mu, T si2, T eps, T noise',
+            'T y',
+            '''
+            y = mu + sqrt(si2 + eps) * noise;
+            ''',
+            'vdl2_fwd')(
+                mu, si2, self.eps, self.normal_noise)
+        if len(inputs) == 4:
+            b = inputs[3]
+            y += b
+        return y,
+
+    def backward_cpu(self, inputs, gy):
+        # TODO: merge calculate_log_alpha and reuse W ** 2
+        x, W, log_alpha = inputs[:3]
+        x = _as_mat(x)
         gy = gy[0]
 
         clip = (1. - self.clip_mask).astype(W.dtype, copy=False)
         clip_W = clip * W
         x2 = x * x
         W2 = clip_W * clip_W
-        alpha = xp.exp(log_alpha)
+        alpha = numpy.exp(log_alpha)
         alpha_W2 = W2 * alpha
         si_before_sqrt = x2.dot(alpha_W2.T) + self.eps
 
@@ -258,18 +286,75 @@ class VDLinear(function.Function):
         gW_from_gmu = gmu.T.dot(x) * clip
 
         gsi = gy * self.normal_noise
-        gsi_before_sqrt = gsi * (0.5 / xp.sqrt(si_before_sqrt))
+        gsi_before_sqrt = gsi * (0.5 / numpy.sqrt(si_before_sqrt))
         gx2_from_gsi = gsi_before_sqrt.dot(alpha_W2)
         gx_from_gsi = gx2_from_gsi * (2. * x)
         galpha_W2_from_gsi = gsi_before_sqrt.T.dot(x2)
         gW2_from_gsi = galpha_W2_from_gsi * alpha
         gW_from_gsi = gW2_from_gsi * (2. * clip_W)
         galpha_from_gsi = galpha_W2_from_gsi * W2
-        glog_alpha = galpha_from_gsi * xp.exp(log_alpha)
+        glog_alpha = galpha_from_gsi * numpy.exp(log_alpha)
 
         gx = (gx_from_gmu + gx_from_gsi).astype(x.dtype, copy=False).reshape(
             inputs[0].shape)
         gW = (gW_from_gmu + gW_from_gsi).astype(W.dtype, copy=False)
+        if len(inputs) == 4:
+            gb = gy.sum(0)
+            return gx, gW, glog_alpha, gb
+        else:
+            return gx, gW, glog_alpha
+
+    def backward_gpu(self, inputs, gy):
+        # TODO: merge calculate_log_alpha and reuse W ** 2
+        x, W, log_alpha = inputs[:3]
+        x = _as_mat(x)
+        xp = cuda.get_array_module(x)
+        gy = gy[0]
+
+        clip, clip_W, W2, alpha, alpha_W2 = cuda.elementwise(
+            'T W, T clip_mask, T la',
+            'T clip, T clip_W, T W2, T alpha, T alpha_W2',
+            '''
+            clip = ((T)1.0 - clip_mask);
+            clip_W = clip * W;
+            W2 = clip_W * clip_W;
+            alpha = exp(la);
+            alpha_W2 = W2 * alpha;
+            ''',
+            'vdl1_bwd')(
+                W, self.clip_mask, log_alpha)
+
+        x2 = x * x
+        si_before_sqrt = x2.dot(alpha_W2.T)
+        gx_from_gmu = gy.dot(clip_W)
+        gW_from_gmu = gy.T.dot(x) * clip
+
+        gsi_before_sqrt = cuda.elementwise(
+            'T gy, T noise, T si_bf_sqrt, T eps',
+            'T gsi_bf_sqrt',
+            '''
+            gsi_bf_sqrt = gy * noise * ((T)0.5 / sqrt(si_bf_sqrt + eps));
+            ''',
+            'gsi_bwd')(
+                gy, self.normal_noise, si_before_sqrt, self.eps)
+
+        galpha_W2_from_gsi = gsi_before_sqrt.T.dot(x2)
+        gW_from_gsi = galpha_W2_from_gsi * alpha * (2. * clip_W)
+        glog_alpha = galpha_W2_from_gsi * W2 * alpha
+
+        gW, glog_alpha = cuda.elementwise(
+            'T galpha_W2_from_gsi, T alpha, T clip_W, T W2, T gW_from_gmu',
+            'T gW, T glog_alpha',
+            '''
+            gW = galpha_W2_from_gsi * alpha * (T)2.0 * clip_W + gW_from_gmu;
+            glog_alpha = galpha_W2_from_gsi * W2 * alpha;
+            ''',
+            'gW_glog_bwd')(
+                galpha_W2_from_gsi, alpha, clip_W, W2, gW_from_gmu)
+
+        gx_from_gsi = gsi_before_sqrt.dot(alpha_W2) * 2. * x
+        gx = (gx_from_gmu + gx_from_gsi).astype(x.dtype, copy=False).reshape(
+            inputs[0].shape)
         if len(inputs) == 4:
             gb = gy.sum(0)
             return gx, gW, glog_alpha, gb
@@ -284,7 +369,8 @@ def vd_linear(x, W, b, loga_threshold=3., log_sigma2=None,
             AttributeError()
         log_alpha = calculate_log_alpha(
             W, log_sigma2, eps=eps, thresholds=thresholds)
-    clip_mask = (log_alpha.data > loga_threshold)
+    clip_mask = (log_alpha.data > loga_threshold).astype(
+        log_alpha.data.dtype, copy=False)
 
     train = configuration.config.train
     if train:
