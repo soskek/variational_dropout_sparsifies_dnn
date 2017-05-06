@@ -10,6 +10,7 @@ from chainer import reporter
 import numpy
 
 import sparse_chainer
+import vd_functions as VDF
 
 # Memo: If p=0.95, then alpha=19. ln(19) = 2.94443897917.
 #       Thus, log_alpha_threashold is set 3.0 approximately.
@@ -35,32 +36,12 @@ def get_vd_links(link):
             yield link
 
 
-def calculate_kl(link):
-    memory_efficiency = configuration.config.user_memory_efficiency
-
-    def _calculate_kl(W, log_sigma2):
-        log_alpha = F.clip(log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
-        clip_mask = (log_alpha.data > link.loga_threshold)
-        normalizer = 1. / W.size
-        reg = (0.63576 * F.sigmoid(1.87320 + 1.48695 * log_alpha)) + \
-              (- 0.5 * F.log1p(F.exp(- log_alpha))) - 0.63576
-        reg = F.where(clip_mask, link.xp.zeros(reg.shape).astype('f'), reg)
-        return - F.sum(reg) * normalizer
-
-    if memory_efficiency > 1:
-        return F.forget(_calculate_kl, link.W, link.log_sigma2)
-    else:
-        return _calculate_kl(link.W, link.log_sigma2)
-
-
 def calculate_p(link):
     """Calculate (something like) probabilities of variational dropout
     This method takes high computational cost.
     """
-    W = link.W.data
-    log_sigma2 = link.log_sigma2.data
-    xp = link.xp
-    alpha = xp.exp(xp.clip(log_sigma2 - xp.log(W ** 2 + 1e-8), -8., 8.))
+    alpha = link.xp.exp(VDF.calculate_log_alpha(
+        link.W, link.log_sigma2, eps=1e-8, thresholds=(-8., 8.)).data)
     p = alpha / (1 + alpha)
     return p
 
@@ -121,36 +102,9 @@ class VariationalDropoutLinear(chainer.links.Linear):
         else:
             self.log_sigma2.initialize((self.out_size, in_size))
 
-    def dropout_linear(self, x):
-        train = configuration.config.train
-        memory_efficiency = configuration.config.user_memory_efficiency
-
-        W, b = self.W, getattr(self, 'b', None)
-
-        def _dropout_linear(x, W, log_sigma2):
-            log_alpha = F.clip(log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
-            clip_mask = (log_alpha.data > self.loga_threshold)
-            if train:
-                W = (1. - clip_mask) * W
-                mu = F.linear(x, W)
-                si = F.sqrt(F.linear(x * x, F.exp(log_alpha) * W * W) + 1e-8)
-                normal_noise = self.xp.random.normal(
-                    0., 1., mu.shape).astype('f')
-                activation = mu + si * normal_noise
-                if b is not None:
-                    activation = F.bias(activation, b)
-                return activation
-            else:
-                return F.linear(x, (1. - clip_mask) * W, b)
-
-        if memory_efficiency > 2:
-            return F.forget(_dropout_linear, x, W, self.log_sigma2)
-        else:
-            return _dropout_linear(x, W, self.log_sigma2)
-
     def get_sparse_cpu_model(self):
-        W = self.W
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
+        log_alpha = VDF.calculate_log_alpha(
+            self.W, self.log_sigma2, eps=1e-8, thresholds=(-8., 8.))
         clip_mask = (log_alpha.data > self.loga_threshold)
         return sparse_chainer.SparseLinearForwardCPU(self, (1. - clip_mask))
 
@@ -158,7 +112,9 @@ class VariationalDropoutLinear(chainer.links.Linear):
         if self.W.data is None:
             self._initialize_params(x.size // x.shape[0])
 
-        return self.dropout_linear(x)
+        return VDF.vd_linear(
+            x, self.W, self.b, self.loga_threshold, log_sigma2=self.log_sigma2,
+            log_alpha=None, eps=1e-8, thresholds=(-8., 8.))
 
 
 def _pair(x):
@@ -197,7 +153,8 @@ class VariationalDropoutConvolution2D(chainer.links.Convolution2D):
     def dropout_convolution_2d(self, x):
         train = configuration.config.train
         W, b = self.W, self.b
-        log_alpha = F.clip(self.log_sigma2 - F.log(W ** 2 + 1e-8), -8., 8.)
+        log_alpha = VDF.calculate_log_alpha(
+            self.W, self.log_sigma2, eps=1e-8, thresholds=(-8., 8.))
         clip_mask = (log_alpha.data > self.loga_threshold)
         if train:
             W = (1. - clip_mask) * W
@@ -413,7 +370,10 @@ class VariationalDropoutChain(chainer.link.Chain):
 
         if add_kl:
             a_regf = sum(
-                calculate_kl(link)
+                VDF.calculate_kl(
+                    link.W, link.loga_threshold,
+                    log_sigma2=link.log_sigma2, log_alpha=None,
+                    eps=1e-8, thresholds=(-8., 8.))
                 for link in self.links()
                 if getattr(link, 'is_variational_dropout', False))
             self.kl_loss = a_regf * self.kl_coef

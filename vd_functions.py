@@ -3,9 +3,11 @@ import numpy
 import chainer
 from chainer import cuda
 from chainer import function
+from chainer import functions as F
 from chainer import utils
 from chainer.utils import type_check
 from chainer import configuration
+import cupy
 
 
 def compositional_calculate_kl(W, log_sigma2, loga_threshold=3.,
@@ -202,6 +204,8 @@ def _as_mat(x):
         return x
     return x.reshape(len(x), -1)
 
+# TODO: RNNVDLinear: efficient multiple (sampled) Linear re-using calculations.
+
 
 class VDLinear(function.Function):
     """Linear function using variational dropout.
@@ -252,7 +256,7 @@ class VDLinear(function.Function):
         x2 = x * x
         mu = x.dot(W.T)
         si2 = x2.dot(alpha_W2.T)
-        self.normal_noise = xp.random.standard_normal(mu.shape).astype(
+        self.normal_noise = cupy.random.standard_normal(mu.shape).astype(
             x.dtype, copy=False)
         y = cuda.elementwise(
             'T mu, T si2, T eps, T noise',
