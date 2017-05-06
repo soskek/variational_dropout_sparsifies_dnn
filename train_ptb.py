@@ -226,14 +226,22 @@ def main():
         model.calc_loss = calc_loss
         model.use_raw_dropout = True
     elif args.resume:
-        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1.)
+        #model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1.)
+        #model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-4)
+        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-5)
         # model.to_variational_dropout()
         chainer.serializers.load_npz(args.resume, model)
-        configuration.config.user_memory_efficiency = 3
+        if args.bproplen <= 20:
+            configuration.config.user_memory_efficiency = 0
+        else:
+            configuration.config.user_memory_efficiency = 3
     else:
         model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-5)
         # model.to_variational_dropout()
-        configuration.config.user_memory_efficiency = 3
+        if args.bproplen <= 20:
+            configuration.config.user_memory_efficiency = 0
+        else:
+            configuration.config.user_memory_efficiency = 3
 
     if args.gpu >= 0:
         chainer.cuda.get_device(args.gpu).use()  # make the GPU current
@@ -243,9 +251,13 @@ def main():
     if args.pretrain:
         optimizer = chainer.optimizers.SGD(lr=1.0)
         optimizer.setup(model)
+        optimizer.add_hook(chainer.optimizer.WeightDecay(5e-4))
+        # optimizer.add_hook(chainer.optimizer.WeightDecay(5e-3))
+        # optimizer.add_hook(chainer.optimizer.Lasso(5e-4))
+        # optimizer.add_hook(chainer.optimizer.Lasso(1e-4))
+        # optimizer.add_hook(chainer.optimizer.WeightDecay(1e-3))
         optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
     else:
-        # optimizer = chainer.optimizers.Adam(alpha=1e-4)
         optimizer = chainer.optimizers.Adam(alpha=1e-4)
         #optimizer = chainer.optimizers.Adam(alpha=1e-5)
         optimizer.setup(model)
