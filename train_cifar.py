@@ -74,7 +74,6 @@ def main():
         model.use_raw_dropout = True
     elif args.resume:
         model = nets.VGG16VD(class_labels, warm_up=1.)
-        #model = nets.VGG16VD(class_labels, warm_up=0.0001)
         model(train[0][0][None, ])  # for setting in_channels automatically
         model.to_variational_dropout()
         chainer.serializers.load_npz(args.resume, model)
@@ -94,7 +93,6 @@ def main():
         optimizer = chainer.optimizers.MomentumSGD(0.1)
         optimizer.setup(model)
         optimizer.add_hook(chainer.optimizer.WeightDecay(5e-4))
-        # optimizer.add_hook(chainer.optimizer.GradientClipping(0.1))
     elif args.resume:
         optimizer = chainer.optimizers.Adam(1e-5)
         optimizer.setup(model)

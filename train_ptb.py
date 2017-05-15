@@ -8,7 +8,6 @@ https://github.com/tomsercu/lstm
 from __future__ import division
 from __future__ import print_function
 import argparse
-import time
 
 import numpy as np
 
@@ -106,7 +105,6 @@ class BPTTUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Progress the dataset iterator for bprop_len words at each iteration.
-        start = time.time()
         for i in range(self.bprop_len):
             # Get the next batch (a list of tuples of two word IDs)
             batch = train_iter.__next__()
@@ -141,23 +139,16 @@ class BPTTUpdater(training.StandardUpdater):
                     setattr(optimizer, 'lr', optimizer.lr / 1.2)
                     print('lr: {} -> {}'.format(
                         optimizer.lr * 1.2, optimizer.lr))
-        loss.data
-        fptime = time.time() - start
 
         optimizer.target.cleargrads()  # Clear the parameter gradients
-        start = time.time()
         loss.backward()  # Backprop
         loss.unchain_backward()  # Truncate the graph
-        bptime = time.time() - start
         optimizer.update()  # Update the parameters
 
         reporter.report(
             {'lr': getattr(optimizer, 'lr', getattr(
                 optimizer, 'alpha', None))},
             optimizer.target)
-
-        reporter.report({'fptime': fptime}, optimizer.target)
-        reporter.report({'bptime': bptime}, optimizer.target)
 
 
 # Routine to rewrite the result dictionary of LogReport to add perplexity
@@ -226,8 +217,6 @@ def main():
         model.calc_loss = calc_loss
         model.use_raw_dropout = True
     elif args.resume:
-        #model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1.)
-        #model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-4)
         model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-5)
         # model.to_variational_dropout()
         chainer.serializers.load_npz(args.resume, model)
@@ -236,7 +225,7 @@ def main():
         else:
             configuration.config.user_memory_efficiency = 3
     else:
-        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-5)
+        model = nets.RNNForLMVD(n_vocab, args.unit, warm_up=1e-7)
         # model.to_variational_dropout()
         if args.bproplen <= 20:
             configuration.config.user_memory_efficiency = 0
@@ -252,14 +241,10 @@ def main():
         optimizer = chainer.optimizers.SGD(lr=1.0)
         optimizer.setup(model)
         optimizer.add_hook(chainer.optimizer.WeightDecay(5e-4))
-        # optimizer.add_hook(chainer.optimizer.WeightDecay(5e-3))
-        # optimizer.add_hook(chainer.optimizer.Lasso(5e-4))
-        # optimizer.add_hook(chainer.optimizer.Lasso(1e-4))
-        # optimizer.add_hook(chainer.optimizer.WeightDecay(1e-3))
         optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
     else:
-        optimizer = chainer.optimizers.Adam(alpha=1e-4)
-        #optimizer = chainer.optimizers.Adam(alpha=1e-5)
+        optimizer = chainer.optimizers.Adam(alpha=1e-5)
+        #optimizer = chainer.optimizers.SGD(lr=1.0)
         optimizer.setup(model)
         optimizer.add_hook(chainer.optimizer.GradientClipping(5.))
 
@@ -289,7 +274,6 @@ def main():
              'perplexity', 'val_perplexity',
              'main/accuracy', 'validation/main/accuracy',
              'main/lr',
-             #'main/fptime', 'main/bptime',
              'elapsed_time']), trigger=(interval, 'iteration'))
     else:
         trainer.extend(extensions.PrintReport(
@@ -298,12 +282,10 @@ def main():
              'main/accuracy', 'validation/main/accuracy',
              'main/class', 'main/kl', 'main/mean_p', 'main/sparsity',
              'main/W/Wnz', 'main/kl_coef', 'main/lr',
-             'main/fptime', 'main/bptime',
              'elapsed_time']), trigger=(interval, 'iteration'))
 
     trainer.extend(extensions.ProgressBar(
         update_interval=1 if args.test else 10))
-    # trainer.extend(extensions.snapshot())
     trainer.extend(extensions.snapshot_object(
         model, 'model_iter_{.updater.iteration}'))
 

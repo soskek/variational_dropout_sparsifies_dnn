@@ -1,3 +1,5 @@
+import numpy
+
 import chainer
 from chainer import configuration
 from chainer import cuda
@@ -5,6 +7,7 @@ from chainer import functions as F
 from chainer import links as L
 
 import variational_dropout as VD
+import utils
 
 
 class LeNet300100VD(VD.VariationalDropoutChain):
@@ -60,11 +63,12 @@ class Block(chainer.Chain):
     """
 
     def __init__(self, out_channels, ksize, pad=1):
-        initializer = chainer.initializers.HeNormal()
+        #initializer = chainer.initializers.HeNormal()
+        initializer = utils.OutputHeNormal()
         super(Block, self).__init__(
             conv=L.Convolution2D(None, out_channels, ksize, pad=pad,
                                  nobias=True, initialW=initializer),
-            bn=L.BatchNormalization(out_channels)
+            bn=L.BatchNormalization(out_channels, eps=1e-3),
         )
 
     def __call__(self, x):
@@ -115,7 +119,8 @@ class VGG16(chainer.Chain):
     """
 
     def __init__(self, class_labels=10):
-        initializer = chainer.initializers.HeNormal()
+        #initializer = chainer.initializers.HeNormal()
+        initializer = utils.OutputHeNormal()
         super(VGG16, self).__init__(
             block1_1=Block(64, 3),
             block1_2=Block(64, 3),
@@ -131,14 +136,22 @@ class VGG16(chainer.Chain):
             block5_2=Block(512, 3),
             block5_3=Block(512, 3),
             fc1=L.Linear(None, 512, nobias=True, initialW=initializer),
-            bn_fc1=L.BatchNormalization(512),
+            bn_fc1=L.BatchNormalization(512, eps=1e-3),
             fc2=L.Linear(None, class_labels, nobias=True,
                          initialW=initializer),
         )
         self.use_raw_dropout = False
+        if class_labels == 10:
+            stats = numpy.load(open('cifar10_mean_std.npz', 'rb'))
+        else:
+            stats = numpy.load(open('cifar100_mean_std.npz', 'rb'))
+        self.data_mean = stats['mean']
+        self.data_std = stats['std']
 
     def __call__(self, x):
         train = configuration.config.train
+        x = (x - self.xp.array(self.data_mean)[None, ]) \
+            / self.xp.array(self.data_std)[None, ]
         if train:
             # horizontal flips
             flipped = x[:x.shape[0] // 2, :, :, ::-1]
