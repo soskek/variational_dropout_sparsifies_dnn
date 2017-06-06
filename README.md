@@ -4,7 +4,7 @@ It will replicate experiments in the paper below
 ```
 Variational Dropout Sparsifies Deep Neural Networks.  
 Dmitry Molchanov, Arsenii Ashukha, Dmitry Vetrov.  
-Under review by ICML 2017.
+ICML 2017.
 ```
 
 See https://arxiv.org/pdf/1701.05369.pdf.
