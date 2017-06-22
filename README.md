@@ -1,5 +1,5 @@
 # Variational Dropout Sparsifies Deep Neural Networks
-The code includes variational dropout for linear and convolutional layers to sparsify deep neural networks by Chainer.
+The code includes variational dropout for linear and convolutional layers to sparsify deep neural networks using Chainer.
 It will replicate experiments in the paper below  
 ```
 Variational Dropout Sparsifies Deep Neural Networks.  
@@ -8,9 +8,6 @@ ICML 2017.
 ```
 
 See https://arxiv.org/pdf/1701.05369.pdf.
-
-This implementation uses new Chainer version 2 (see https://github.com/pfnet/chainer/tree/_v2 or https://github.com/pfnet/chainer/releases/tag/v2.0.0b1).
-This does not work on the old version of Chainer (in its master branch).
 
 This repository contains  
 - MNIST example using variational dropout
@@ -30,19 +27,13 @@ Example scripts are derived from official examples of Chainer.
 
 # Requirements
 
-Requirements of this code obey those of Chainer v2. Additionally, this requires [scipy](https://www.scipy.org/) for sparse matrix computation on CPU.
+- Python 3.6.0+
+- Chainer 2.0.0+ (this version is strictly required)
+- numpy 1.12.1+
+- [scipy](https://www.scipy.org/) for sparse matrix computation on CPU.
+- cupy 1.0.0+ (if using gpu)
+- and their dependencies
 
-Note Chainer are planning the v2.0.0 release on May 16.
-Until the day, you can install Chainer v2 beta by following  
-```
-pip install chainer --pre
-```
-If you use GPU (CUDA/cuDNN), also  
-```
-pip install cupy
-```
-
-This reposity itself does not need any setup.
 
 # Examples
 
